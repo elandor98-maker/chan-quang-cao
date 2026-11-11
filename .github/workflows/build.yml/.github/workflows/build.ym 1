@@ -1,0 +1,86 @@
+name: Build Chan Quang Cao
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+
+    env:
+      EXPECTED_SIGNER: "64:C5:3A:66:3F:E1:5D:32:13:9D:15:B5:3E:18:51:56:E1:17:0C:A6:16:E2:87:04:92:31:6D:88:60:24:2E:CF"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Decode base64 assets
+        run: |
+          find . -name '*.b64' -not -path './.git/*' | while read -r f; do
+            base64 -d "$f" > "${f%.b64}"
+            rm -f "$f"
+            echo "decoded ${f%.b64}"
+          done
+
+      - name: Prepare fixed keystore
+        run: |
+          test -f signing/debug.keystore
+          cp signing/debug.keystore app/signing-debug.keystore
+          cat > keystore.properties <<EOF
+          keyAlias=androiddebugkey
+          keyPassword=android
+          storePassword=android
+          storeFile=${{ github.workspace }}/signing/debug.keystore
+          EOF
+
+      - name: Build fdroid full release
+        run: ./gradlew assembleFdroidFullRelease -PwebsiteDegoogled=true --warning-mode all
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          IZZYONDROID_KS_FILE: signing-debug.keystore
+          IZZYONDROID_KS_ALIAS: androiddebugkey
+          IZZYONDROID_KS_PASSWORD: android
+
+      - name: Find and verify arm64 APK signer
+        run: |
+          APK=$(find app/build/outputs/apk -type f -name '*arm64-v8a*.apk' | head -n 1)
+          if [ -z "$APK" ]; then echo "::error::arm64 APK not found"; find app/build/outputs/apk -type f | head -50; exit 1; fi
+          echo "APK=$APK"
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          FP=$("$APKSIGNER" verify --print-certs "$APK" | grep -i "SHA-256" | head -n 1 | sed 's/.*: //' | tr -d ' ')
+          EXPECTED_NOSPACE=$(echo "$EXPECTED_SIGNER" | tr -d ' ')
+          echo "signer SHA-256: $FP"
+          if [ "$FP" != "$EXPECTED_NOSPACE" ]; then
+            echo "::error::Signer mismatch (expected $EXPECTED_SIGNER) - THAT BAI, not releasing"
+            exit 1
+          fi
+          cp "$APK" chan-quang-cao-arm64.apk
+          ls -lh chan-quang-cao-arm64.apk
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: build-${{ github.run_number }}
+          draft: false
+          prerelease: false
+          files: chan-quang-cao-arm64.apk
+          fail_on_unmatched_files: true
+
+      - name: Cleanup keystore
+        if: always()
+        run: rm -f signing/debug.keystore app/signing-debug.keystore
