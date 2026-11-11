@@ -932,4 +932,10 @@
     <string name="fork_hero_status_off" translatable="true">Chưa bật chặn quảng cáo</string>
     <string name="fork_hero_link_web" translatable="true">Hoàn hoa hồng Shopee</string>
     <string name="fork_hero_link_telegram" translatable="true">Telegram hỗ trợ</string>
+    <string name="fork_hero_mode_btn" translatable="true">Chế độ</string>
+    <string name="fork_hero_apps_btn" translatable="true">Tường lửa</string>
+    <string name="fork_hero_speed_btn" translatable="true">Đo tốc độ mạng</string>
+    <string name="fork_hero_speed_running" translatable="true">Đang đo…</string>
+    <string name="fork_hero_speed_result" translatable="true">Ping: %1$d ms · Tải xuống: %2$s Mbps</string>
+    <string name="fork_hero_speed_error" translatable="true">Đo thất bại — kiểm tra mạng rồi thử lại</string>
 </resources>

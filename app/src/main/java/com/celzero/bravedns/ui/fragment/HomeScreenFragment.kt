@@ -175,6 +175,8 @@ import android.media.MediaPlayer
 import android.view.Surface
 import android.view.TextureView
 import com.celzero.bravedns.util.ForkBlockedCounter
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Calendar
 import java.util.Locale
 import java.util.Locale.getDefault
@@ -305,6 +307,14 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     companion object {
         private const val TAG = "HSFragment"
         private const val MAX_RULE_BADGE_CHARS = 3
+
+        // fork v4: process-lifetime cold-start marker. Statics die with the
+        // process, so this is true exactly once per cold start; the first
+        // auto-start evaluation of a process clears the persisted manual-stop
+        // flag (a stop from a previous session must not suppress the
+        // designed cold-start auto-start), while fragment recreations within
+        // the session leave the flag — and the user's stop — untouched.
+        @Volatile var forkProcessColdStart: Boolean = true
 
         // swipeable rules card page indices
         private const val RULES_PAGE_UNIVERSAL = 0
@@ -2775,6 +2785,10 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         if (isVpnActivated) {
             stopVpnService()
         } else {
+            // fork v4: a deliberate user start clears the persisted
+            // manual-stop flag, so later auto-start evaluations stay
+            // consistent with what the user just asked for
+            persistentState.forkUserStopped = false
             prepareAndStartVpn()
         }
     }
@@ -2912,6 +2926,7 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         forkFetchPublicIp()
         forkHeroPlaybackResume()
         forkRefreshHero()
+        forkSyncSpeedButton()
         startTrafficStats()
         //maybeShowGracePeriodDialog()
         handleRethinkAppStatus()
@@ -3135,15 +3150,25 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
      */
     @Suppress("DEPRECATION")
     private fun maybeAutoStartVpn() {
+        // fork v4: once per process cold start, clear the persisted
+        // manual-stop flag — auto-start on a fresh app open is the product
+        // design; the flag only guards stops made within THIS session
+        if (forkProcessColdStart) {
+            forkProcessColdStart = false
+            persistentState.forkUserStopped = false
+        }
         // fork: on a fresh open, auto-start blocking even if the vpn was not
         // previously enabled; at most once per app open, and never after the
-        // user pressed STOP during this session
+        // user pressed STOP during this session (the persisted forkUserStopped
+        // check keeps that true even when this fragment instance is new —
+        // bottom-nav tab switches recreate it and reset the in-memory flags)
         if (
             !isVpnActivated &&
                 !VpnController.isOn() &&
                 persistentState.forkAutoEnableOnLaunch &&
                 !forkAutoStartAttempted &&
-                !forkUserStoppedThisSession
+                !forkUserStoppedThisSession &&
+                !persistentState.forkUserStopped
         ) {
             forkAutoStartAttempted = true
             Logger.i(LOG_TAG_VPN, "fork: auto-start vpn on app launch")
@@ -3207,6 +3232,7 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     override fun onPause() {
         super.onPause()
         forkHeroPlaybackPause()
+        forkCancelSpeedTest()
         stopBorderAnimation()
         stopShimmer()
         stopTrafficStats()
@@ -3229,6 +3255,7 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
 
     override fun onDestroyView() {
         forkReleaseHeroVideo()
+        forkCancelSpeedTest()
         // Cancel any running jobs before the view is destroyed
         proxyStateListenerJob?.cancel()
         proxyStateListenerJob = null
@@ -3393,6 +3420,12 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
 
     private fun stopVpnService() {
         forkUserStoppedThisSession = true
+        // fork v4: persist the manual stop for the rest of this app session —
+        // the in-memory flag alone dies whenever the home fragment is
+        // recreated (bottom-nav tab switches), after which the launch
+        // auto-start used to switch the vpn straight back on and the stop
+        // appeared not to work
+        persistentState.forkUserStopped = true
         VpnController.stop("home", requireContext())
     }
 
@@ -3863,11 +3896,19 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
 
     /** Wires the hero block: big toggle (mirrors the main button), link buttons, video. */
     private fun forkSetupHero() {
-        b.fhsHeroToggleBtn.setOnClickListener { b.fhsDnsOnOffBtn.performClick() }
-        b.fhsHeroLinkWebBtn.setOnClickListener { forkOpenUrl(getString(R.string.fork_web_link)) }
-        b.fhsHeroLinkTelegramBtn.setOnClickListener {
-            forkOpenUrl(getString(R.string.about_telegram_link))
-        }
+        // fork v4: drive the real start/stop handler directly instead of a
+        // synthetic performClick() on the main button — that button lives in
+        // the v3-hidden (visibility=gone) control cluster, and the hero must
+        // not depend on click dispatch through a hidden hierarchy
+        b.fhsHeroToggleBtn.setOnClickListener { handleMainScreenBtnClickEvent() }
+        // fork v4: the web / telegram link buttons are gone from Home (they
+        // live in About — no duplication). The hero controls row instead
+        // re-opens the original mode chooser bottom sheet and the original
+        // apps firewall screen (the exact flows the v3-hidden legacy cards
+        // used), plus the on-demand speed test.
+        b.fhsHeroModeBtn.setOnClickListener { openBottomSheet() }
+        b.fhsHeroAppsBtn.setOnClickListener { startAppsActivity() }
+        b.fhsHeroSpeedBtn.setOnClickListener { forkRunSpeedTest() }
         b.fhsHeroVideo.surfaceTextureListener =
             object : TextureView.SurfaceTextureListener {
                 override fun onSurfaceTextureAvailable(
@@ -3906,6 +3947,127 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             )
         } catch (e: Exception) {
             Logger.w(LOG_TAG_UI, "fork: open url failed: ${e.message}", e)
+        }
+    }
+
+    // fork v4: on-demand network speed test (hero). Runs ONLY when the user
+    // taps the button, one run at a time, and nothing is persisted. The app
+    // is excluded from its own tunnel, so these requests measure the device's
+    // real connection directly — they are never routed through the wireguard
+    // proxy (which only carries traffic inside the tunnel).
+    private var forkSpeedJob: Job? = null
+
+    @Volatile private var forkSpeedConn: HttpURLConnection? = null
+
+    private fun forkRunSpeedTest() {
+        if (forkSpeedJob?.isActive == true) return
+        try {
+            b.fhsHeroSpeedBtn.isEnabled = false
+            b.fhsHeroSpeedTxt.visibility = View.VISIBLE
+            b.fhsHeroSpeedTxt.text = getString(R.string.fork_hero_speed_running)
+        } catch (e: Exception) {
+            return
+        }
+        forkSpeedJob =
+            viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                var pingMs: Long? = null
+                var mbps: Double? = null
+                try {
+                    // latency: a few tiny round-trips, keep the best
+                    var best = Long.MAX_VALUE
+                    repeat(3) {
+                        val c =
+                            URL("https://speed.cloudflare.com/__down?bytes=1024")
+                                .openConnection() as HttpURLConnection
+                        forkSpeedConn = c
+                        c.connectTimeout = 5_000
+                        c.readTimeout = 5_000
+                        val t0 = System.nanoTime()
+                        val code = c.responseCode
+                        val dt = (System.nanoTime() - t0) / 1_000_000
+                        if (code == 200 && dt > 0 && dt < best) best = dt
+                        c.disconnect()
+                    }
+                    if (best != Long.MAX_VALUE) pingMs = best
+                    // download: one bounded 12 MB fetch, capped at 20 s
+                    val c =
+                        URL("https://speed.cloudflare.com/__down?bytes=12000000")
+                            .openConnection() as HttpURLConnection
+                    forkSpeedConn = c
+                    c.connectTimeout = 8_000
+                    c.readTimeout = 20_000
+                    if (c.responseCode == 200) {
+                        var total = 0L
+                        val buf = ByteArray(64 * 1024)
+                        val t0 = System.nanoTime()
+                        c.inputStream.use { ins ->
+                            while (true) {
+                                val n = ins.read(buf)
+                                if (n <= 0) break
+                                total += n
+                                if ((System.nanoTime() - t0) / 1_000_000_000 > 20) break
+                            }
+                        }
+                        val secs = (System.nanoTime() - t0) / 1_000_000_000.0
+                        if (total > 0 && secs > 0) {
+                            mbps = total * 8.0 / secs / 1_000_000.0
+                        }
+                    }
+                    c.disconnect()
+                } catch (e: Exception) {
+                    // network errors land here; so does the IOException from
+                    // the abort path (disconnect in onPause / onDestroyView)
+                    Logger.w(LOG_TAG_UI, "fork speed test failed: ${e.message}", e)
+                } finally {
+                    forkSpeedConn = null
+                }
+                withContext(Dispatchers.Main) {
+                    if (view == null) return@withContext
+                    try {
+                        b.fhsHeroSpeedBtn.isEnabled = true
+                        b.fhsHeroSpeedTxt.text =
+                            if (pingMs != null && mbps != null) {
+                                getString(
+                                    R.string.fork_hero_speed_result,
+                                    pingMs,
+                                    forkFormatMbps(mbps)
+                                )
+                            } else {
+                                getString(R.string.fork_hero_speed_error)
+                            }
+                    } catch (e: Exception) {
+                        // hero views unavailable; skip quietly
+                    }
+                }
+            }
+    }
+
+    private fun forkFormatMbps(mbps: Double): String {
+        return if (mbps >= 10) {
+            String.format(Locale.US, "%.0f", mbps)
+        } else {
+            String.format(Locale.US, "%.1f", mbps)
+        }
+    }
+
+    /** Aborts an in-flight speed test (user left Home / view destroyed). */
+    private fun forkCancelSpeedTest() {
+        try {
+            forkSpeedConn?.disconnect()
+        } catch (e: Exception) {
+            // ignore
+        }
+        forkSpeedJob?.cancel()
+        forkSpeedJob = null
+    }
+
+    /** Re-enables the speed-test button when no run is in flight (onResume). */
+    private fun forkSyncSpeedButton() {
+        if (forkSpeedJob?.isActive == true) return
+        try {
+            b.fhsHeroSpeedBtn.isEnabled = true
+        } catch (e: Exception) {
+            // hero views unavailable; skip quietly
         }
     }
 
@@ -4210,15 +4372,22 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             // paths, is awaited before the first vpn start, never overrides a
             // user-chosen endpoint, and is verified by reading the connected
             // endpoint back before being marked done.
-            if (!persistentState.forkSeeded) {
-                // (b) import bundled wireguard proxy presets, if the build shipped any
-                try {
-                    forkImportProxyPresets(ctx)
-                } catch (e: Exception) {
-                    Logger.w(LOG_TAG_UI, "fork seed: wg preset import failed: ${e.message}", e)
-                }
-                persistentState.forkSeeded = true
+            // (b) import bundled wireguard proxy presets, if the build shipped
+            // any. v4: this ensure/repair pass now runs on EVERY launch, not
+            // just the first — the import is idempotent (it skips names that
+            // already have a config and rebuilds the persisted id map from the
+            // live configs), so it also repairs an install-over that lost the
+            // imported preset or drifted the id map. That drift is exactly how
+            // the WARP toggle vanished from the v3 home: in v1–v3 the import
+            // ran once ever (forkSeeded gate) while the home render filters
+            // configs by the persisted id map — any mismatch left zero
+            // buttons and only a "not available" status line.
+            try {
+                forkImportProxyPresets(ctx)
+            } catch (e: Exception) {
+                Logger.w(LOG_TAG_UI, "fork seed: wg preset import failed: ${e.message}", e)
             }
+            persistentState.forkSeeded = true
             // (c) banking / wallet bypass: re-scanned every launch (cheap, ~26 packages)
             forkApplyBankBypass(ctx)
         }
@@ -4256,15 +4425,26 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         for (file in names) {
             if (!file.endsWith(".conf")) continue
             val presetName = file.removeSuffix(".conf")
-            if (existing.contains(presetName) || ids.containsKey(presetName)) continue
+            // v4: skip only when a live config with this name exists — the
+            // persisted id map must never veto a re-import (a stale id whose
+            // config is gone is precisely the failure being repaired)
+            if (existing.contains(presetName)) continue
             val text = ctx.assets.open("presets/$file").bufferedReader().readText()
             val config = Config.parse(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
             WireguardManager.addConfig(config, presetName)
             Logger.i(LOG_TAG_UI, "fork seed: imported proxy preset $presetName")
         }
         WireguardManager.load(true)
-        for (m in WireguardManager.getAllMappings()) {
+        val mappingsAfter = WireguardManager.getAllMappings()
+        for (m in mappingsAfter) {
             if (names.any { it.removeSuffix(".conf") == m.name }) ids[m.name] = m.id
+        }
+        // v4: prune id-map entries for bundled presets that have no live
+        // config, so the home render can never key on a ghost id
+        for (file in names) {
+            if (!file.endsWith(".conf")) continue
+            val presetName = file.removeSuffix(".conf")
+            if (mappingsAfter.none { it.name == presetName }) ids.remove(presetName)
         }
         forkSavePresetIds(ids)
     }
@@ -4308,44 +4488,56 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         val list = b.fhsForkProxyList
         list.removeAllViews()
         io {
+            // fork v4: repair pass first — re-import any bundled preset whose
+            // config is missing and rebuild the id map from the live configs,
+            // so the WARP toggle rendered below cannot silently vanish the
+            // way it did on the v3 home (one-shot v1 import + a render keyed
+            // on the persisted id map; any drift left zero buttons).
+            try {
+                forkImportProxyPresets(requireContext())
+            } catch (e: Exception) {
+                Logger.w(LOG_TAG_UI, "fork: wg preset repair failed: ${e.message}", e)
+            }
             WireguardManager.load(false)
             val ids = forkPresetIds()
             val mappings = WireguardManager.getAllMappings().filter { ids.containsKey(it.name) }
             uiCtx {
                 list.removeAllViews()
-                if (mappings.isEmpty()) {
-                    b.fhsForkProxyTitle.text =
-                        "Proxy: chưa có sẵn (đang chờ cấu hình) — chặn quảng cáo vẫn chạy bình thường"
-                } else {
-                    b.fhsForkProxyTitle.text = "Proxy (bấm để bật / tắt)"
-                    for (m in mappings) {
-                        val btn = MaterialButton(requireContext())
-                        btn.layoutParams =
-                            LinearLayout.LayoutParams(
-                                    LinearLayout.LayoutParams.MATCH_PARENT,
-                                    LinearLayout.LayoutParams.WRAP_CONTENT
-                                )
-                                .apply { topMargin = 6 }
-                        btn.text = forkPresetLabel(m.name, m.isActive)
-                        // fork v3: the preset list now lives on the hero, over the
-                        // video — restyle to match the hero link buttons (translucent
-                        // dark fill, white text, light outline)
-                        val density = resources.displayMetrics.density
-                        btn.setTextColor(0xFFFFFFFF.toInt())
-                        btn.backgroundTintList = ColorStateList.valueOf(0x40000000)
-                        btn.strokeColor = ColorStateList.valueOf(0x8CFFFFFF.toInt())
-                        btn.strokeWidth = (1f * density).toInt()
-                        btn.cornerRadius = (20f * density).toInt()
-                        btn.setOnClickListener { forkToggleProxyPreset(m.id) }
-                        list.addView(btn)
-                    }
+                // fork v4: the section heading (fhs_fork_proxy_title) stays
+                // GONE — Home carries no proxy status text at all (the old
+                // empty-state "Proxy: chưa có sẵn…" line is removed); the
+                // WARP toggle buttons below are the only proxy control.
+                b.fhsForkProxyTitle.visibility = View.GONE
+                for (m in mappings) {
+                    val btn = MaterialButton(requireContext())
+                    btn.layoutParams =
+                        LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT
+                            )
+                            .apply { topMargin = 6 }
+                    btn.text = forkPresetLabel(m.name, m.isActive)
+                    // fork v3: the preset list now lives on the hero, over the
+                    // video — restyle to match the hero link buttons (translucent
+                    // dark fill, white text, light outline)
+                    val density = resources.displayMetrics.density
+                    btn.setTextColor(0xFFFFFFFF.toInt())
+                    btn.backgroundTintList = ColorStateList.valueOf(0x40000000)
+                    btn.strokeColor = ColorStateList.valueOf(0x8CFFFFFF.toInt())
+                    btn.strokeWidth = (1f * density).toInt()
+                    btn.cornerRadius = (20f * density).toInt()
+                    btn.setOnClickListener { forkToggleProxyPreset(m.id) }
+                    list.addView(btn)
                 }
             }
         }
     }
 
     private fun forkPresetLabel(name: String, active: Boolean): String {
-        return if (active) "● $name — đang bật (bấm để tắt)" else "○ $name — bấm để bật"
+        // fork v4: the bundled preset is Cloudflare WARP — label the toggle
+        // with the familiar 1.1.1.1 name so it reads unambiguously
+        val display = if (name.equals("WARP", ignoreCase = true)) "WARP (1.1.1.1)" else name
+        return if (active) "● $display — đang bật (bấm để tắt)" else "○ $display — bấm để bật"
     }
 
     private fun forkToggleProxyPreset(id: Int) {
@@ -4361,6 +4553,9 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
                     uiCtx {
                         if (!VpnController.isOn()) {
                             forkUserStoppedThisSession = false
+                            // fork v4: deliberate user start — clear the
+                            // persisted manual-stop flag too
+                            persistentState.forkUserStopped = false
                             prepareAndStartVpn()
                         }
                     }

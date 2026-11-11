@@ -1009,6 +1009,12 @@
     <string name="fork_hero_status_off" translatable="true">Ad blocking is OFF</string>
     <string name="fork_hero_link_web" translatable="true">Shopee cashback</string>
     <string name="fork_hero_link_telegram" translatable="true">Telegram support</string>
+    <string name="fork_hero_mode_btn" translatable="true">Mode</string>
+    <string name="fork_hero_apps_btn" translatable="true">Firewall</string>
+    <string name="fork_hero_speed_btn" translatable="true">Network speed test</string>
+    <string name="fork_hero_speed_running" translatable="true">Measuring…</string>
+    <string name="fork_hero_speed_result" translatable="true">Ping: %1$d ms · Download: %2$s Mbps</string>
+    <string name="fork_hero_speed_error" translatable="true">Measurement failed — check the connection and try again</string>
     <string name="about_docs_link" translatable="false">https://docs.rethinkdns.com/</string>
     <string name="about_faq_link" translatable="false">https://www.rethinkdns.com/faq</string>
     <string name="about_github_link" translatable="false">https://github.com/celzero/rethink-app</string>

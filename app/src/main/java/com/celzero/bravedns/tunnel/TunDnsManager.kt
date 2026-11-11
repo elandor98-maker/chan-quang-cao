@@ -801,28 +801,40 @@ object TunDnsManager: KoinComponent {
                     "msg: ${summary.msg}, " +
                     "region: ${summary.region}"
         )
-        if (!DEBUG) {
-            if (summary.id.contains(Backend.Fixed)) {
-                return
-            }
-        }
-        // fork "Chan Quang Cao": bump the feather-weight blocked-today counter
-        // (independent of the battery-costly dns logging, which stays off)
+        // fork "Chan Quang Cao" v4: bump the feather-weight blocked-today
+        // counter (independent of the battery-costly dns logging, which stays
+        // off). Two v4 changes, from the on-device "counter frozen at 10"
+        // diagnosis:
+        //  (1) the hook now runs BEFORE the Backend.Fixed early-return below,
+        //      so no summary can slip past it;
+        //  (2) an answer also counts when the backend flags it as blocked by
+        //      the upstream resolver itself (summary.upstreamBlocks) — the
+        //      RDNS Default / Plus / Privacy server-side case. The bare
+        //      isBlockedDnsAnswer predicate only consults that flag when the
+        //      rdata is exactly "--", so upstream blocks whose answers take
+        //      other shapes (cname targets, HTTPS/SVCB qtypes, non-"--"
+        //      empties, non-COMPLETE statuses) were never counted.
         try {
             if (
-                DnsLogTracker.isBlockedDnsAnswer(
-                    transportId = summary.id,
-                    statusCode = summary.status,
-                    response = summary.rData ?: "",
-                    qType = summary.qType,
-                    blocklists = summary.blocklists ?: "",
-                    upstreamBlock = summary.upstreamBlocks
-                )
+                summary.upstreamBlocks ||
+                    DnsLogTracker.isBlockedDnsAnswer(
+                        transportId = summary.id,
+                        statusCode = summary.status,
+                        response = summary.rData ?: "",
+                        qType = summary.qType,
+                        blocklists = summary.blocklists ?: "",
+                        upstreamBlock = summary.upstreamBlocks
+                    )
             ) {
                 ForkBlockedCounter.recordBlocked(persistentState)
             }
         } catch (e: Exception) {
             // a cosmetic counter must never break dns handling
+        }
+        if (!DEBUG) {
+            if (summary.id.contains(Backend.Fixed)) {
+                return
+            }
         }
         aggregateDnsActivity(summary)
         netLogTracker.processDnsLog(summary)

@@ -150,6 +150,9 @@
                     android:layout_height="0dp"
                     android:layout_weight="1" />
 
+                <!-- fork v4: the web / telegram link buttons are removed from
+                     Home (they live in About); this is the controls row:
+                     mode chooser + apps firewall, reusing the original flows -->
                 <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -157,10 +160,10 @@
                     android:orientation="horizontal">
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/fhs_hero_link_web_btn"
+                        android:id="@+id/fhs_hero_mode_btn"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/fork_hero_link_web"
+                        android:text="@string/fork_hero_mode_btn"
                         android:textColor="#FFFFFF"
                         app:backgroundTint="#40000000"
                         app:cornerRadius="20dp"
@@ -168,11 +171,11 @@
                         app:strokeWidth="1dp" />
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/fhs_hero_link_telegram_btn"
+                        android:id="@+id/fhs_hero_apps_btn"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="10dp"
-                        android:text="@string/fork_hero_link_telegram"
+                        android:text="@string/fork_hero_apps_btn"
                         android:textColor="#FFFFFF"
                         app:backgroundTint="#40000000"
                         app:cornerRadius="20dp"
@@ -181,8 +184,41 @@
 
                 </LinearLayout>
 
+                <!-- fork v4: on-demand network speed test (tap-only) + result -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/fhs_hero_speed_btn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/fork_hero_speed_btn"
+                    android:textColor="#FFFFFF"
+                    app:backgroundTint="#40000000"
+                    app:cornerRadius="20dp"
+                    app:strokeColor="#8CFFFFFF"
+                    app:strokeWidth="1dp" />
+
+                <androidx.appcompat.widget.AppCompatTextView
+                    android:id="@+id/fhs_hero_speed_txt"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:alpha="0.95"
+                    android:gravity="center"
+                    android:shadowColor="#80000000"
+                    android:shadowDx="0"
+                    android:shadowDy="1"
+                    android:shadowRadius="4"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:visibility="gone"
+                    tools:text="Ping: 24 ms · Tải xuống: 86 Mbps" />
+
+                <!-- fork v4: heading hidden for good — no proxy status text on
+                     Home; the WARP toggle buttons in fhs_fork_proxy_list are
+                     the only proxy control (id kept for the binding / code) -->
                 <androidx.appcompat.widget.AppCompatTextView
                     android:id="@+id/fhs_fork_proxy_title"
+                    android:visibility="gone"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"

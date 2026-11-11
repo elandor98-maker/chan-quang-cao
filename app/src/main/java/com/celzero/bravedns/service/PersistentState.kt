@@ -185,6 +185,13 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     // wireguard config ids of bundled proxy presets, format: "name1=id1;name2=id2"
     var forkProxyPresetIds by stringPref("fork_proxy_preset_ids").withDefault<String>("")
 
+    // v4: the user manually stopped the vpn during this app session; the
+    // launch auto-start must respect it across home-fragment recreations
+    // (tab switches recreate the fragment and reset its in-memory flags).
+    // Cleared once per process cold start (see HomeScreenFragment) and by
+    // any deliberate user start.
+    var forkUserStopped by booleanPref("fork_user_stopped").withDefault<Boolean>(false)
+
     // cached public-ip line shown on the home screen
     // (v3 format: "ipv4|place|isp|epochMs"; v1/v2 entries are ignored on read)
     var forkPublicIpCache by stringPref("fork_public_ip_cache").withDefault<String>("")
