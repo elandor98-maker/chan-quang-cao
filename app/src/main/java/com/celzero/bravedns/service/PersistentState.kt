@@ -161,6 +161,17 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     // one-time first-launch seeding (RDNS Privacy, bank bypass, wg presets) is done
     var forkSeeded by booleanPref("fork_seeded_v1").withDefault<Boolean>(false)
 
+    // v2 seed: same presets, but applied deterministically (awaited before the
+    // first vpn start) and with braveMode written explicitly; separate key so
+    // v1 installs re-run the corrected seed exactly once
+    var forkSeededV2 by booleanPref("fork_seeded_v2").withDefault<Boolean>(false)
+
+    // lightweight "blocked today" counter for the home hero (date + count);
+    // kept independent of the (battery-costly) dns/connection logging
+    var forkBlockedDay by stringPref("fork_blocked_day").withDefault<String>("")
+
+    var forkBlockedCount by intPref("fork_blocked_count").withDefault<Int>(0)
+
     // battery-optimization exemption was already requested once
     var forkBatteryExemptionAsked by
         booleanPref("fork_battery_exemption_asked").withDefault<Boolean>(false)

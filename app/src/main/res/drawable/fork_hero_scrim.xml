@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- fork: dark gradient scrim over the home hero video so text and cards stay readable -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#73000000"
+        android:centerColor="#33000000"
+        android:endColor="#99000000"
+        android:type="linear" />
+</shape>

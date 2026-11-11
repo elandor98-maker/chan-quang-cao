@@ -55,6 +55,11 @@ class RethinkDnsEndpointRepository(private val rethinkDnsEndpointDao: RethinkDns
         rethinkDnsEndpointDao.updateConnectionDefault()
     }
 
+    // fork: fetch a built-in endpoint row by its exact name (e.g. RDNS Privacy)
+    suspend fun getEndpointByName(name: String): RethinkDnsEndpoint? {
+        return rethinkDnsEndpointDao.getEndpointByName(name)
+    }
+
     // fork: activate a named rethink endpoint (e.g. RDNS Privacy) as the default
     suspend fun updateConnectionByName(name: String) {
         rethinkDnsEndpointDao.removeConnectionStatus()

@@ -158,13 +158,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import com.celzero.bravedns.wireguard.Config
 import com.google.android.material.button.MaterialButton
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileOutputStream
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.koin.android.ext.android.inject
+import android.graphics.Matrix
+import android.graphics.SurfaceTexture
 import android.graphics.drawable.Drawable
+import android.media.MediaPlayer
+import android.view.Surface
+import android.view.TextureView
+import com.celzero.bravedns.util.ForkBlockedCounter
 import java.util.Calendar
 import java.util.Locale
 import java.util.Locale.getDefault
@@ -187,6 +196,16 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     // fork: auto-start bookkeeping (per fragment instance = per app open)
     private var forkAutoStartAttempted: Boolean = false
     private var forkUserStoppedThisSession: Boolean = false
+
+    // fork v2: preset-seed gate bookkeeping; the gate runs at most once per
+    // fragment instance, before the first vpn start of the session
+    private var forkSeedGateRunning: Boolean = false
+    private var forkSeedGateDone: Boolean = false
+
+    // fork v2: hero background video player (home screen only; released with the view)
+    private var forkHeroPlayer: MediaPlayer? = null
+    private var forkHeroSurface: Surface? = null
+    private var forkHeroTexture: SurfaceTexture? = null
 
     private var isVpnActivated: Boolean = false
 
@@ -421,6 +440,7 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         forkRenderProxyPresets()
         forkShowCachedPublicIp()
         forkFetchPublicIp()
+        forkSetupHero()
         captureActiveEmphasis()
         updateMainButtonUi()
         updateCardsUi()
@@ -746,6 +766,7 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             btn.setTextColor(UIUtils.fetchColor(ctx, R.attr.invertedPrimaryTextColor))
             startBorderAnimation()
         }
+        forkRefreshHero()
     }
 
     /**
@@ -2858,6 +2879,8 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         syncDnsStatus()
         handleLockdownModeIfNeeded()
         forkFetchPublicIp()
+        forkHeroPlaybackResume()
+        forkRefreshHero()
         startTrafficStats()
         //maybeShowGracePeriodDialog()
         handleRethinkAppStatus()
@@ -3152,6 +3175,7 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
 
     override fun onPause() {
         super.onPause()
+        forkHeroPlaybackPause()
         stopBorderAnimation()
         stopShimmer()
         stopTrafficStats()
@@ -3162,15 +3186,18 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     override fun onHiddenChanged(hidden: Boolean) {
         super.onHiddenChanged(hidden)
         if (hidden) {
+            forkHeroPlaybackPause()
             stopBorderAnimation()
             stopTrafficStats()
         } else {
+            forkHeroPlaybackResume()
             updateMainButtonUi()
             startTrafficStats()
         }
     }
 
     override fun onDestroyView() {
+        forkReleaseHeroVideo()
         // Cancel any running jobs before the view is destroyed
         proxyStateListenerJob?.cancel()
         proxyStateListenerJob = null
@@ -3273,6 +3300,30 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     }
 
     private fun prepareAndStartVpn() {
+        // fork v2: gate the first vpn start of a not-yet-seeded install until
+        // the presets (RDNS Privacy + DNS-only mode) are applied and verified,
+        // so the tunnel is never built on the factory defaults. Runs at most
+        // once per session; a preset failure never blocks the vpn for good
+        // (the gate falls through and retries on the next launch instead).
+        if (!persistentState.forkSeededV2 && !forkSeedGateDone) {
+            if (!forkSeedGateRunning) {
+                forkSeedGateRunning = true
+                lifecycleScope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            withTimeoutOrNull(15_000) { forkApplyPresetsV2() }
+                        }
+                    } catch (e: Exception) {
+                        Logger.w(LOG_TAG_UI, "fork seed v2 gate failed: ${e.message}", e)
+                    } finally {
+                        forkSeedGateRunning = false
+                        forkSeedGateDone = true
+                    }
+                    if (isAdded) prepareAndStartVpn()
+                }
+            }
+            return
+        }
         // On Android 16 (SDK 37)+ the local network access permission is mandatory for the
         // VPN tunnel to function. Request it *before* establishing the VPN; if the user denies
         // it, the VPN is not started. The flow resumes from proceedWithVpnStart() once the
@@ -3776,24 +3827,281 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
 
     // ---------------- fork "Chan Quang Cao" ----------------
 
+    // ---------------- fork v2: home hero (video background) ----------------
+
+    /** Wires the hero block: big toggle (mirrors the main button), link buttons, video. */
+    private fun forkSetupHero() {
+        b.fhsHeroToggleBtn.setOnClickListener { b.fhsDnsOnOffBtn.performClick() }
+        b.fhsHeroLinkWebBtn.setOnClickListener { forkOpenUrl(getString(R.string.fork_web_link)) }
+        b.fhsHeroLinkTelegramBtn.setOnClickListener {
+            forkOpenUrl(getString(R.string.about_telegram_link))
+        }
+        b.fhsHeroVideo.surfaceTextureListener =
+            object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(
+                    st: SurfaceTexture,
+                    width: Int,
+                    height: Int
+                ) {
+                    forkHeroTexture = st
+                    forkStartHeroVideo(st)
+                }
+
+                override fun onSurfaceTextureSizeChanged(
+                    st: SurfaceTexture,
+                    width: Int,
+                    height: Int
+                ) {
+                    forkUpdateVideoTransform()
+                }
+
+                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                    forkHeroTexture = null
+                    forkReleaseHeroVideo()
+                    return true
+                }
+
+                override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+            }
+        forkRefreshHero()
+    }
+
+    private fun forkOpenUrl(url: String) {
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: Exception) {
+            Logger.w(LOG_TAG_UI, "fork: open url failed: ${e.message}", e)
+        }
+    }
+
+    /**
+     * The hero video ships as two raw-resource halves (fork_sea_loop_a/b):
+     * the full mp4's base64 twin exceeds the push channel's per-request size
+     * ceiling, so the halves travel separately and are joined into a cache
+     * file on first use. The join is a one-time local copy; playback then
+     * reads the combined file like any other video file.
+     */
+    private fun forkHeroCombinedFile(ctx: Context): File? {
+        return try {
+            val out = File(ctx.cacheDir, "fork_sea_loop_v2.mp4")
+            if (out.exists() && out.length() > 1_000_000L) return out
+            val tmp = File(ctx.cacheDir, "fork_sea_loop_v2.tmp")
+            FileOutputStream(tmp).use { os ->
+                for (resId in intArrayOf(R.raw.fork_sea_loop_a, R.raw.fork_sea_loop_b)) {
+                    ctx.resources.openRawResource(resId).use { input -> input.copyTo(os) }
+                }
+            }
+            if (tmp.renameTo(out) && out.length() > 1_000_000L) out else null
+        } catch (e: Exception) {
+            Logger.w(LOG_TAG_UI, "fork hero: video join failed: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun forkStartHeroVideo(st: SurfaceTexture) {
+        if (forkHeroPlayer != null) {
+            forkHeroPlaybackResume()
+            forkUpdateVideoTransform()
+            return
+        }
+        val ctx = context ?: return
+        io {
+            val file = forkHeroCombinedFile(ctx)
+            if (file == null) {
+                Logger.w(LOG_TAG_UI, "fork hero: combined video unavailable")
+                return@io
+            }
+            uiCtx {
+                if (forkHeroTexture !== st || forkHeroPlayer != null) return@uiCtx
+                try {
+                    val player = MediaPlayer()
+                    forkHeroPlayer = player
+                    val surface = Surface(st)
+                    forkHeroSurface = surface
+                    player.setSurface(surface)
+                    player.setDataSource(file.absolutePath)
+                    player.isLooping = true
+                    player.setVolume(0f, 0f)
+                    player.setOnPreparedListener { mp ->
+                        forkUpdateVideoTransform()
+                        if (isResumed && !isHidden) {
+                            try {
+                                mp.start()
+                            } catch (e: Exception) {
+                                // not in a startable state yet; onResume will start it
+                            }
+                        }
+                    }
+                    player.setOnVideoSizeChangedListener { _, _, _ ->
+                        forkUpdateVideoTransform()
+                    }
+                    player.prepareAsync()
+                } catch (e: Exception) {
+                    Logger.w(LOG_TAG_UI, "fork hero: video start failed: ${e.message}", e)
+                    forkReleaseHeroVideo()
+                }
+            }
+        }
+    }
+
+    /** Centre-crop transform so the video fills the hero without distortion. */
+    private fun forkUpdateVideoTransform() {
+        val view =
+            try {
+                b.fhsHeroVideo
+            } catch (e: Exception) {
+                return
+            }
+        val player = forkHeroPlayer ?: return
+        val vw = player.videoWidth
+        val vh = player.videoHeight
+        if (vw <= 0 || vh <= 0 || view.width == 0 || view.height == 0) return
+        val viewAspect = view.width.toFloat() / view.height.toFloat()
+        val videoAspect = vw.toFloat() / vh.toFloat()
+        val matrix = Matrix()
+        if (videoAspect > viewAspect) {
+            matrix.setScale(
+                videoAspect / viewAspect,
+                1f,
+                view.width / 2f,
+                view.height / 2f
+            )
+        } else {
+            matrix.setScale(
+                1f,
+                viewAspect / videoAspect,
+                view.width / 2f,
+                view.height / 2f
+            )
+        }
+        view.setTransform(matrix)
+    }
+
+    private fun forkHeroPlaybackPause() {
+        try {
+            forkHeroPlayer?.let {
+                if (it.isPlaying) it.pause()
+            }
+        } catch (e: Exception) {
+            // player not in a pausable state; nothing to do
+        }
+    }
+
+    private fun forkHeroPlaybackResume() {
+        try {
+            forkHeroPlayer?.let {
+                if (!it.isPlaying) it.start()
+            }
+        } catch (e: Exception) {
+            // player not prepared yet; the prepared listener starts it instead
+        }
+    }
+
+    private fun forkReleaseHeroVideo() {
+        try {
+            forkHeroPlayer?.release()
+        } catch (e: Exception) {
+            // already released
+        }
+        forkHeroPlayer = null
+        try {
+            forkHeroSurface?.release()
+        } catch (e: Exception) {
+            // already released
+        }
+        forkHeroSurface = null
+    }
+
+    /** Refreshes the hero status line, toggle tint and today's blocked count. */
+    private fun forkRefreshHero() {
+        if (view == null) return
+        try {
+            b.fhsHeroBlockedTxt.text =
+                getString(
+                    R.string.fork_hero_blocked_today,
+                    ForkBlockedCounter.todayCount(persistentState)
+                )
+            val on = isVpnActivated
+            b.fhsHeroStatusTxt.text =
+                getString(if (on) R.string.fork_hero_status_on else R.string.fork_hero_status_off)
+            b.fhsHeroToggleBtn.backgroundTintList =
+                ColorStateList.valueOf(if (on) 0x992E7D32.toInt() else 0x40FFFFFF.toInt())
+        } catch (e: Exception) {
+            // hero views unavailable (layout variant / view teardown); skip quietly
+        }
+    }
+
+    /**
+     * Fork v2 preset seed: RDNS Privacy + DNS-only brave mode, applied through
+     * the engine's own change paths (the same calls the settings UI makes), and
+     * verified by reading the connected endpoint back. Only a verified run is
+     * marked done (forkSeededV2); failures are retried on the next launch.
+     *
+     * Why v1's seed did not stick: it wrote the endpoint table and the
+     * connectedDnsName pref directly, bypassing AppConfig.onDnsChange — so the
+     * connectedDns LiveData (initialised once from the pref when AppConfig is
+     * created, and the only source the home DNS card reads) kept showing the
+     * factory default name; it also raced the auto-start, so a tunnel built
+     * before the write landed ran on RDNS Default for that session; and it set
+     * forkSeeded=true even when a step had failed. The brave mode likewise was
+     * only a pref *default*, never an explicit write.
+     */
+    private suspend fun forkApplyPresetsV2() {
+        // (1) brave mode: explicit write through AppConfig (pref + observer)
+        try {
+            appConfig.changeBraveMode(AppConfig.BraveMode.DNS.mode)
+        } catch (e: Exception) {
+            Logger.w(LOG_TAG_UI, "fork seed v2: brave mode write failed: ${e.message}", e)
+        }
+        // (2) RDNS Privacy via the engine's own activation path (identical to
+        // tapping the endpoint in the DNS list: RethinkEndpointAdapter)
+        try {
+            val privacy =
+                rethinkDnsEndpointRepository.getEndpointByName(RethinkDnsEndpoint.RETHINK_PRIVACY)
+            if (privacy != null) {
+                privacy.isActive = true
+                appConfig.handleRethinkChanges(privacy)
+            } else {
+                Logger.w(LOG_TAG_UI, "fork seed v2: RDNS Privacy endpoint row not found")
+            }
+        } catch (e: Exception) {
+            Logger.w(LOG_TAG_UI, "fork seed v2: dns preset failed: ${e.message}", e)
+        }
+        // (3) verify by reading back; mark seeded only on success
+        val ep =
+            try {
+                rethinkDnsEndpointRepository.getConnectedEndpoint()
+            } catch (e: Exception) {
+                null
+            }
+        if (
+            ep?.name == RethinkDnsEndpoint.RETHINK_PRIVACY &&
+                persistentState.braveMode == AppConfig.BraveMode.DNS.mode
+        ) {
+            persistentState.forkSeededV2 = true
+            persistentState.forkSeeded = true
+            Logger.i(LOG_TAG_UI, "fork seed v2: RDNS Privacy + DNS-only mode verified")
+        } else {
+            Logger.w(
+                LOG_TAG_UI,
+                "fork seed v2: verification failed (endpoint=${ep?.name}, " +
+                    "mode=${persistentState.braveMode}); will retry next launch"
+            )
+        }
+    }
+
     /** One-time seeding on first launch + cheap re-scans on later launches. */
     private fun forkFirstLaunchSetup() {
         val ctx = requireContext()
         io {
-            // (a) default DNS endpoint -> RDNS Privacy (server-side ad/tracker blocklists)
+            // (a) DNS endpoint + brave-mode presets moved to the gated v2 seed
+            // (forkApplyPresetsV2), which runs through AppConfig's own change
+            // paths, is awaited before the first vpn start, and is verified by
+            // reading the connected endpoint back before being marked done.
             if (!persistentState.forkSeeded) {
-                try {
-                    rethinkDnsEndpointRepository.updateConnectionByName(
-                        RethinkDnsEndpoint.RETHINK_PRIVACY
-                    )
-                    val ep = rethinkDnsEndpointRepository.getConnectedEndpoint()
-                    if (ep != null) {
-                        persistentState.connectedDnsName = "${ep.name},${ep.url}"
-                    }
-                    Logger.i(LOG_TAG_UI, "fork seed: RDNS Privacy activated")
-                } catch (e: Exception) {
-                    Logger.w(LOG_TAG_UI, "fork seed: dns preset failed: ${e.message}", e)
-                }
                 // (b) import bundled wireguard proxy presets, if the build shipped any
                 try {
                     forkImportProxyPresets(ctx)
@@ -3948,10 +4256,20 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         }
     }
 
+    /** Writes the public-IP line to both the fork card and the hero block. */
+    private fun forkSetIpText(text: String) {
+        b.fhsPublicIpTxt.text = text
+        try {
+            b.fhsHeroIpTxt.text = text
+        } catch (e: Exception) {
+            // hero view not present in this layout variant; card already updated
+        }
+    }
+
     private fun forkShowCachedPublicIp() {
         val raw = persistentState.forkPublicIpCache
         if (raw.isEmpty()) {
-            b.fhsPublicIpTxt.text = "IP hiện tại của máy: đang kiểm tra…"
+            forkSetIpText("IP hiện tại của máy: đang kiểm tra…")
             return
         }
         val parts = raw.split("|")
@@ -3962,7 +4280,7 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
                 } catch (e: Exception) {
                     parts[1]
                 }
-            b.fhsPublicIpTxt.text = "IP hiện tại của máy: ${parts[0]} · $country"
+            forkSetIpText("IP hiện tại của máy: ${parts[0]} · $country")
         }
     }
 

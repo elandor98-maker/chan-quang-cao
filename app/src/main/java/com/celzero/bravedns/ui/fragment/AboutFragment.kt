@@ -260,6 +260,7 @@ class AboutFragment : Fragment(R.layout.fragment_about), View.OnClickListener, K
         b.aboutLicense.setOnClickListener(this)
         b.aboutMail.setOnClickListener(this)
         b.aboutTelegram.setOnClickListener(this)
+        b.aboutForkWeb.setOnClickListener(this)
         b.aboutReddit.setOnClickListener(this)
         b.aboutMastodon.setOnClickListener(this)
         b.aboutElement.setOnClickListener(this)
@@ -459,6 +460,9 @@ class AboutFragment : Fragment(R.layout.fragment_about), View.OnClickListener, K
             }
             b.aboutTelegram -> {
                 openUrl(requireContext(), getString(R.string.about_telegram_link))
+            }
+            b.aboutForkWeb -> {
+                openUrl(requireContext(), getString(R.string.fork_web_link))
             }
             b.aboutBlog -> {
                 openUrl(requireContext(), getString(R.string.about_docs_link))

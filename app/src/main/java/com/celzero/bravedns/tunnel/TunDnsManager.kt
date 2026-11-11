@@ -28,6 +28,7 @@ import com.celzero.bravedns.service.WireguardManager
 import com.celzero.bravedns.ui.bottomsheet.BlockFreeDnsModeBottomSheet
 import com.celzero.bravedns.util.AndroidUidConfig
 import com.celzero.bravedns.util.Constants.Companion.INVALID_UID
+import com.celzero.bravedns.util.ForkBlockedCounter
 import com.celzero.bravedns.util.Constants.Companion.UID_EVERYBODY
 import com.celzero.bravedns.util.KnownPorts
 import com.celzero.bravedns.util.Logger
@@ -804,6 +805,24 @@ object TunDnsManager: KoinComponent {
             if (summary.id.contains(Backend.Fixed)) {
                 return
             }
+        }
+        // fork "Chan Quang Cao": bump the feather-weight blocked-today counter
+        // (independent of the battery-costly dns logging, which stays off)
+        try {
+            if (
+                DnsLogTracker.isBlockedDnsAnswer(
+                    transportId = summary.id,
+                    statusCode = summary.status,
+                    response = summary.rData ?: "",
+                    qType = summary.qType,
+                    blocklists = summary.blocklists ?: "",
+                    upstreamBlock = summary.upstreamBlocks
+                )
+            ) {
+                ForkBlockedCounter.recordBlocked(persistentState)
+            }
+        } catch (e: Exception) {
+            // a cosmetic counter must never break dns handling
         }
         aggregateDnsActivity(summary)
         netLogTracker.processDnsLog(summary)

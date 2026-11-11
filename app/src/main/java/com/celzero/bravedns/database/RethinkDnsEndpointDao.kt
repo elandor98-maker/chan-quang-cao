@@ -96,6 +96,10 @@ interface RethinkDnsEndpointDao {
     @Query("select * from RethinkDnsEndpoint where name = 'RDNS Default' and isCustom = 0 LIMIT 1")
     fun getDefaultRethinkEndpoint(): RethinkDnsEndpoint?
 
+    // fork: fetch a built-in endpoint row by its exact name (e.g. RDNS Privacy)
+    @Query("select * from RethinkDnsEndpoint where name = :name and uid = $MISSING_UID LIMIT 1")
+    fun getEndpointByName(name: String): RethinkDnsEndpoint?
+
     @Query("select * from RethinkDnsEndpoint where uid = $MISSING_UID order by name asc")
     fun getAllForBlockFree(): List<RethinkDnsEndpoint>
 }
