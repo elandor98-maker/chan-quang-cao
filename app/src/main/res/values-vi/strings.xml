@@ -938,4 +938,8 @@
     <string name="fork_hero_speed_running" translatable="true">Đang đo…</string>
     <string name="fork_hero_speed_result" translatable="true">Ping: %1$d ms · Tải xuống: %2$s Mbps</string>
     <string name="fork_hero_speed_error" translatable="true">Đo thất bại — kiểm tra mạng rồi thử lại</string>
+    <string name="fork_hero_speed_result_dl" translatable="true">Tải xuống: %1$s Mbps</string>
+    <string name="fork_hero_speed_err_timeout" translatable="true">Đo thất bại — hết giờ (mạng quá chậm)</string>
+    <string name="fork_hero_speed_err_http" translatable="true">Đo thất bại — lỗi máy chủ (HTTP %1$d)</string>
+    <string name="fork_hero_speed_err_network" translatable="true">Đo thất bại — lỗi mạng</string>
 </resources>

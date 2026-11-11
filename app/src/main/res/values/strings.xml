@@ -1015,6 +1015,10 @@
     <string name="fork_hero_speed_running" translatable="true">Measuring…</string>
     <string name="fork_hero_speed_result" translatable="true">Ping: %1$d ms · Download: %2$s Mbps</string>
     <string name="fork_hero_speed_error" translatable="true">Measurement failed — check the connection and try again</string>
+    <string name="fork_hero_speed_result_dl" translatable="true">Download: %1$s Mbps</string>
+    <string name="fork_hero_speed_err_timeout" translatable="true">Measurement failed — timed out (connection too slow)</string>
+    <string name="fork_hero_speed_err_http" translatable="true">Measurement failed — server error (HTTP %1$d)</string>
+    <string name="fork_hero_speed_err_network" translatable="true">Measurement failed — network error</string>
     <string name="about_docs_link" translatable="false">https://docs.rethinkdns.com/</string>
     <string name="about_faq_link" translatable="false">https://www.rethinkdns.com/faq</string>
     <string name="about_github_link" translatable="false">https://github.com/celzero/rethink-app</string>

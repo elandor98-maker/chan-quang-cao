@@ -172,6 +172,16 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     // corrected rule runs exactly once on v1/v2 installs too.
     var forkSeededV3 by booleanPref("fork_seeded_v3").withDefault<Boolean>(false)
 
+    // v5 preset marker: the dns endpoint name + brave mode the v5 preset
+    // bundle last applied (or last observed as a deliberate user choice).
+    // Empty endpoint = the v5 preset has not completed a verified run yet.
+    // On later launches, live values that differ from this marker are
+    // treated as deliberate user changes: they are respected and the marker
+    // moves to them, so the preset never re-stomps a manual change.
+    var forkPresetV5Endpoint by stringPref("fork_preset_v5_endpoint").withDefault<String>("")
+
+    var forkPresetV5Mode by intPref("fork_preset_v5_mode").withDefault<Int>(-1)
+
     // lightweight "blocked today" counter for the home hero (date + count);
     // kept independent of the (battery-costly) dns/connection logging
     var forkBlockedDay by stringPref("fork_blocked_day").withDefault<String>("")

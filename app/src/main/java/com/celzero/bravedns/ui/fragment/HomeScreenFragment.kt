@@ -154,6 +154,7 @@ import com.waseemsabir.betterypermissionhelper.BatteryPermissionHelper
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -176,6 +177,7 @@ import android.view.Surface
 import android.view.TextureView
 import com.celzero.bravedns.util.ForkBlockedCounter
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.util.Calendar
 import java.util.Locale
@@ -315,6 +317,13 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         // designed cold-start auto-start), while fragment recreations within
         // the session leave the flag — and the user's stop — untouched.
         @Volatile var forkProcessColdStart: Boolean = true
+
+        // fork v5: serializes the wireguard preset ensure/repair passes.
+        // Two unsynchronized passes run on every home creation
+        // (forkFirstLaunchSetup and the hero render); in v4 they raced and
+        // imported the bundled WARP preset twice (see forkImportProxyPresets).
+        // Static so fragment recreations (tab switches) share the same lock.
+        val forkWgPresetMutex = Mutex()
 
         // swipeable rules card page indices
         private const val RULES_PAGE_UNIVERSAL = 0
@@ -3972,68 +3981,167 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
                 var pingMs: Long? = null
                 var mbps: Double? = null
-                try {
-                    // latency: a few tiny round-trips, keep the best
-                    var best = Long.MAX_VALUE
-                    repeat(3) {
-                        val c =
-                            URL("https://speed.cloudflare.com/__down?bytes=1024")
-                                .openConnection() as HttpURLConnection
-                        forkSpeedConn = c
-                        c.connectTimeout = 5_000
-                        c.readTimeout = 5_000
-                        val t0 = System.nanoTime()
-                        val code = c.responseCode
-                        val dt = (System.nanoTime() - t0) / 1_000_000
-                        if (code == 200 && dt > 0 && dt < best) best = dt
-                        c.disconnect()
+                // fork v5: a specific failure reason for the result line —
+                // 0 none, 1 timeout, 2 http (code in failHttp),
+                // 3 other network error
+                var failKind = 0
+                var failHttp = 0
+                fun noteFailure(kind: Int, http: Int = 0) {
+                    if (failKind == 0) {
+                        failKind = kind
+                        failHttp = http
                     }
-                    if (best != Long.MAX_VALUE) pingMs = best
-                    // download: one bounded 12 MB fetch, capped at 20 s
-                    val c =
-                        URL("https://speed.cloudflare.com/__down?bytes=12000000")
-                            .openConnection() as HttpURLConnection
-                    forkSpeedConn = c
-                    c.connectTimeout = 8_000
-                    c.readTimeout = 20_000
-                    if (c.responseCode == 200) {
-                        var total = 0L
-                        val buf = ByteArray(64 * 1024)
-                        val t0 = System.nanoTime()
-                        c.inputStream.use { ins ->
-                            while (true) {
-                                val n = ins.read(buf)
-                                if (n <= 0) break
-                                total += n
-                                if ((System.nanoTime() - t0) / 1_000_000_000 > 20) break
+                }
+                try {
+                    // latency: best of 3 tiny round-trips. v5: each attempt is
+                    // isolated — in v4 a single thrown attempt (one slow TLS
+                    // handshake on a high-latency link) escaped the loop and
+                    // failed the whole run before any measuring happened.
+                    var best = Long.MAX_VALUE
+                    val pingStart = System.nanoTime()
+                    repeat(3) {
+                        if (!isActive) return@launch
+                        if ((System.nanoTime() - pingStart) / 1_000_000 > 12_000) return@repeat
+                        var c: HttpURLConnection? = null
+                        try {
+                            c =
+                                URL("https://speed.cloudflare.com/__down?bytes=1024")
+                                    .openConnection() as HttpURLConnection
+                            forkSpeedConn = c
+                            c.connectTimeout = 5_000
+                            c.readTimeout = 5_000
+                            val t0 = System.nanoTime()
+                            val code = c.responseCode
+                            if (code == 200) {
+                                // drain the tiny body so the timing covers a
+                                // full round-trip, not just the headers
+                                try {
+                                    c.inputStream.use { it.readBytes() }
+                                } catch (e: Exception) {
+                                    // body errors do not void a good round-trip
+                                }
+                                val dt = (System.nanoTime() - t0) / 1_000_000
+                                if (dt > 0 && dt < best) best = dt
+                            } else {
+                                noteFailure(2, code)
+                            }
+                        } catch (e: SocketTimeoutException) {
+                            noteFailure(1)
+                        } catch (e: Exception) {
+                            noteFailure(3)
+                        } finally {
+                            try {
+                                c?.disconnect()
+                            } catch (e: Exception) {
+                                // ignore
                             }
                         }
-                        val secs = (System.nanoTime() - t0) / 1_000_000_000.0
-                        if (total > 0 && secs > 0) {
-                            mbps = total * 8.0 / secs / 1_000_000.0
-                        }
                     }
-                    c.disconnect()
+                    if (best != Long.MAX_VALUE) pingMs = best
+                    // download (v5 rewrite). Why v4 could only ever fail on
+                    // this device: it fetched ONE request of
+                    // __down?bytes=12000000 — and speed.cloudflare.com
+                    // answers 403 for that size (verified with curl from the
+                    // build VM: bytes=10000001 -> 200 with the full body,
+                    // bytes=11000000 and 12000000 -> HTTP 403, 1-byte body),
+                    // so v4's responseCode == 200 gate never opened and every
+                    // tap ended at the generic failure line. The v5 shape:
+                    // a 1 MB probe, then 5 MB chunks (each safely under the
+                    // endpoint's ~10 MB per-request ceiling) until ~8 s of
+                    // downloading has elapsed; bytes actually received are
+                    // counted as they arrive, so partial data is a result,
+                    // not a failure. Overall deadline ~30 s.
+                    val dlDeadline = System.nanoTime() + 30_000_000_000L
+                    var dlBytes = 0L
+                    var dlStart = 0L
+                    var dlLast = 0L
+                    var firstChunk = true
+                    while (isActive) {
+                        val want = if (firstChunk) 1_000_000 else 5_000_000
+                        var c: HttpURLConnection? = null
+                        var chunkBytes = 0L
+                        var chunkOk = false
+                        try {
+                            c =
+                                URL("https://speed.cloudflare.com/__down?bytes=$want")
+                                    .openConnection() as HttpURLConnection
+                            forkSpeedConn = c
+                            c.connectTimeout = 10_000
+                            c.readTimeout = 15_000
+                            val code = c.responseCode
+                            if (code != 200) {
+                                noteFailure(2, code)
+                            } else {
+                                chunkOk = true
+                                if (dlStart == 0L) dlStart = System.nanoTime()
+                                c.inputStream.use { ins ->
+                                    val buf = ByteArray(64 * 1024)
+                                    while (true) {
+                                        val n = ins.read(buf)
+                                        if (n <= 0) break
+                                        chunkBytes += n
+                                        dlLast = System.nanoTime()
+                                        // stop filling the bucket once the
+                                        // ~8 s measure window is full, or at
+                                        // the overall deadline
+                                        if (dlLast - dlStart > 8_000_000_000L) break
+                                        if (dlLast > dlDeadline) break
+                                    }
+                                }
+                            }
+                        } catch (e: SocketTimeoutException) {
+                            noteFailure(1)
+                        } catch (e: Exception) {
+                            noteFailure(3)
+                        } finally {
+                            try {
+                                c?.disconnect()
+                            } catch (e: Exception) {
+                                // ignore
+                            }
+                        }
+                        dlBytes += chunkBytes
+                        firstChunk = false
+                        if (!chunkOk) break // no 200 body at all: stop
+                        if (chunkBytes == 0L) break // a 200 that delivered nothing
+                        if (dlStart > 0L && dlLast - dlStart >= 8_000_000_000L) break
+                        if (System.nanoTime() > dlDeadline) break
+                    }
+                    if (dlBytes > 0 && dlStart > 0L && dlLast > dlStart) {
+                        val secs = (dlLast - dlStart) / 1_000_000_000.0
+                        mbps = dlBytes * 8.0 / secs / 1_000_000.0
+                    }
                 } catch (e: Exception) {
-                    // network errors land here; so does the IOException from
                     // the abort path (disconnect in onPause / onDestroyView)
+                    // also lands here mid-flight; the cancelled check below
+                    // keeps it from touching the UI
                     Logger.w(LOG_TAG_UI, "fork speed test failed: ${e.message}", e)
+                    if (failKind == 0) failKind = 3
                 } finally {
                     forkSpeedConn = null
                 }
+                if (!isActive) return@launch // aborted; leave the UI alone
                 withContext(Dispatchers.Main) {
                     if (view == null) return@withContext
                     try {
                         b.fhsHeroSpeedBtn.isEnabled = true
                         b.fhsHeroSpeedTxt.text =
-                            if (pingMs != null && mbps != null) {
-                                getString(
-                                    R.string.fork_hero_speed_result,
-                                    pingMs,
-                                    forkFormatMbps(mbps)
-                                )
-                            } else {
-                                getString(R.string.fork_hero_speed_error)
+                            when {
+                                mbps != null && pingMs != null ->
+                                    getString(
+                                        R.string.fork_hero_speed_result,
+                                        pingMs,
+                                        forkFormatMbps(mbps)
+                                    )
+                                mbps != null ->
+                                    getString(
+                                        R.string.fork_hero_speed_result_dl,
+                                        forkFormatMbps(mbps)
+                                    )
+                                failKind == 1 -> getString(R.string.fork_hero_speed_err_timeout)
+                                failKind == 2 ->
+                                    getString(R.string.fork_hero_speed_err_http, failHttp)
+                                else -> getString(R.string.fork_hero_speed_err_network)
                             }
                     } catch (e: Exception) {
                         // hero views unavailable; skip quietly
@@ -4363,6 +4471,135 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         }
     }
 
+    /**
+     * Fork v5 preset bundle: RDNS Privacy as the ACTIVE endpoint + DNS-only
+     * brave mode ("DNS (tiết kiệm pin)") — the product promise is that
+     * everything comes preset in the APK, with zero manual setup. (RDNS Plus
+     * is retired as a landing state: the user's hand-picked 11-list config
+     * measurably under-blocked — full-screen in-app interstitials still
+     * loaded — while RDNS Privacy is the preconfigured strongest endpoint.
+     * His latency on Plus wandered 78–219 ms; the Privacy colo may differ,
+     * but blocking strength is the priority he asked for.)
+     *
+     * Self-heal semantics, driven by a persisted marker
+     * (PersistentState.forkPresetV5Endpoint / forkPresetV5Mode) holding the
+     * values the preset last applied:
+     *
+     *  - No marker (first v5 run): if the active endpoint is RDNS Plus, the
+     *    factory default, the preset itself, or missing, apply the full
+     *    bundle through the engine's own change paths (handleRethinkChanges
+     *    + changeBraveMode, exactly what the settings UI calls), verify by
+     *    reading back, and only then write the marker. Any OTHER active
+     *    endpoint is a deliberate user choice (custom DoH etc.): touch
+     *    nothing — endpoint or mode — and mark the observed values so they
+     *    are respected from then on.
+     *  - Marker present: if the live values still equal the marker, the
+     *    verified preset stands and there is nothing to do. If they differ,
+     *    the user changed them deliberately after the preset landed: respect
+     *    the new values and move the marker to them. The preset NEVER
+     *    re-stomps a later manual change.
+     *
+     * Placement: runs from forkFirstLaunchSetup — i.e. on home creation,
+     * not only on a vpn start request. That is the v3 lesson: on
+     * install-over devices the start path may never fire (the vpn is
+     * already running), so a start-gated seed never landed at all. A
+     * verification failure leaves the marker unset, so the next launch
+     * retries; the pass never blocks the UI or the vpn.
+     */
+    private suspend fun forkApplyPresetsV5() {
+        val active =
+            try {
+                rethinkDnsEndpointRepository.getConnectedEndpoint()
+            } catch (e: Exception) {
+                null
+            }
+        val curEndpoint = active?.name ?: ""
+        val curMode = persistentState.braveMode
+        val markerEndpoint = persistentState.forkPresetV5Endpoint
+        if (markerEndpoint.isNotEmpty()) {
+            if (
+                curEndpoint != markerEndpoint || curMode != persistentState.forkPresetV5Mode
+            ) {
+                // deliberate user change after the preset landed: respect it
+                // and re-mark, so the preset never fights the user
+                persistentState.forkPresetV5Endpoint = curEndpoint
+                persistentState.forkPresetV5Mode = curMode
+                Logger.i(
+                    LOG_TAG_UI,
+                    "fork seed v5: user-changed values respected " +
+                        "(endpoint=$curEndpoint, mode=$curMode); marker updated"
+                )
+            }
+            return
+        }
+        // first v5 run (no marker yet)
+        val legacyEndpoint =
+            curEndpoint == RethinkDnsEndpoint.RETHINK_PLUS ||
+                curEndpoint == RethinkDnsEndpoint.RETHINK_DEFAULT ||
+                curEndpoint == RethinkDnsEndpoint.RETHINK_PRIVACY ||
+                active == null
+        if (!legacyEndpoint) {
+            // some other endpoint the user picked deliberately: respect the
+            // whole current state and mark it
+            persistentState.forkPresetV5Endpoint = curEndpoint
+            persistentState.forkPresetV5Mode = curMode
+            Logger.i(
+                LOG_TAG_UI,
+                "fork seed v5: active endpoint '$curEndpoint' is a user choice; " +
+                    "preset bundle skipped"
+            )
+            return
+        }
+        // apply the bundle through the engine's own change paths
+        try {
+            if (curMode != AppConfig.BraveMode.DNS.mode) {
+                appConfig.changeBraveMode(AppConfig.BraveMode.DNS.mode)
+            }
+        } catch (e: Exception) {
+            Logger.w(LOG_TAG_UI, "fork seed v5: brave mode write failed: ${e.message}", e)
+        }
+        try {
+            if (curEndpoint != RethinkDnsEndpoint.RETHINK_PRIVACY) {
+                val privacy =
+                    rethinkDnsEndpointRepository.getEndpointByName(
+                        RethinkDnsEndpoint.RETHINK_PRIVACY
+                    )
+                if (privacy != null) {
+                    privacy.isActive = true
+                    appConfig.handleRethinkChanges(privacy)
+                } else {
+                    Logger.w(LOG_TAG_UI, "fork seed v5: RDNS Privacy endpoint row not found")
+                }
+            }
+        } catch (e: Exception) {
+            Logger.w(LOG_TAG_UI, "fork seed v5: dns preset failed: ${e.message}", e)
+        }
+        // verify by reading back; write the marker only on a verified run
+        val ep =
+            try {
+                rethinkDnsEndpointRepository.getConnectedEndpoint()
+            } catch (e: Exception) {
+                null
+            }
+        if (
+            ep?.name == RethinkDnsEndpoint.RETHINK_PRIVACY &&
+                persistentState.braveMode == AppConfig.BraveMode.DNS.mode
+        ) {
+            persistentState.forkPresetV5Endpoint = RethinkDnsEndpoint.RETHINK_PRIVACY
+            persistentState.forkPresetV5Mode = AppConfig.BraveMode.DNS.mode
+            persistentState.forkSeededV3 = true
+            persistentState.forkSeededV2 = true
+            persistentState.forkSeeded = true
+            Logger.i(LOG_TAG_UI, "fork seed v5: RDNS Privacy + DNS-only mode verified; marker set")
+        } else {
+            Logger.w(
+                LOG_TAG_UI,
+                "fork seed v5: verification failed (endpoint=${ep?.name}, " +
+                    "mode=${persistentState.braveMode}); marker left unset, will retry next launch"
+            )
+        }
+    }
+
     /** One-time seeding on first launch + cheap re-scans on later launches. */
     private fun forkFirstLaunchSetup() {
         val ctx = requireContext()
@@ -4382,6 +4619,15 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             // ran once ever (forkSeeded gate) while the home render filters
             // configs by the persisted id map — any mismatch left zero
             // buttons and only a "not available" status line.
+            // fork v5: the preset bundle (RDNS Privacy + DNS-only mode, with
+            // self-heal marker semantics) runs here — on home creation, not
+            // only on a vpn start request (see forkApplyPresetsV5 for why
+            // the start-gated placement never landed on install-overs)
+            try {
+                withTimeoutOrNull(15_000) { forkApplyPresetsV5() }
+            } catch (e: Exception) {
+                Logger.w(LOG_TAG_UI, "fork seed v5 failed: ${e.message}", e)
+            }
             try {
                 forkImportProxyPresets(ctx)
             } catch (e: Exception) {
@@ -4411,42 +4657,123 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         }
     }
 
+    /**
+     * Fork v5 ensure/repair pass for the bundled wireguard presets.
+     *
+     * Why v4 produced TWO WARP configs on the user's phone (diagnosed from
+     * code): this pass runs twice per home creation on unsynchronized
+     * coroutines (forkFirstLaunchSetup + forkRenderProxyPresets), and
+     * WireguardManager.addConfig() has no identity dedupe of its own — it
+     * always mints a fresh id. Both passes snapshotted "no config named WARP
+     * yet" before either insert landed, so both imported the bundled preset:
+     * two configs, same name, identical keys. The render then keyed buttons
+     * on name membership in the id map, so both twins rendered with
+     * independent states — and the inactive twin was a phantom: the engine
+     * itself refuses (WireguardManager.canEnableProxy(id), enforced by the
+     * legacy detail UI) to enable a config whose keys overlap an
+     * already-active one, so tapping it never drove the real proxy.
+     *
+     * The v5 pass therefore:
+     *  - is serialized on a static mutex, so the two callers can no longer
+     *    interleave snapshots and inserts;
+     *  - dedupes by IDENTITY, not just name: a live config is "the same
+     *    product config" when it carries the preset's name AND the same key
+     *    material (interface private key + peer public keys — the exact
+     *    comparison canEnableProxy makes). An existing twin is reused; a
+     *    second copy is never imported;
+     *  - prunes duplicates the v4 race created: among proven-identical
+     *    same-name configs it keeps exactly one (the active one if any,
+     *    else the lowest id) and deleteConfig()s the rest. Only fork-preset
+     *    duplicates are pruned — a config whose name differs, or whose keys
+     *    cannot be proven identical to the bundled asset, is never touched;
+     *  - rewrites the persisted id map to hold exactly the keeper id per
+     *    preset name, which the render resolves by id (never by name).
+     */
     private suspend fun forkImportProxyPresets(ctx: Context) {
-        val names =
-            try {
-                ctx.assets.list("presets")?.toList() ?: emptyList()
-            } catch (e: Exception) {
-                emptyList()
+        forkWgPresetMutex.withLock {
+            val names =
+                try {
+                    ctx.assets.list("presets")?.toList() ?: emptyList()
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            if (names.isEmpty()) return
+            // ground truth from the db, not a possibly stale in-memory cache
+            WireguardManager.load(true)
+            val ids = mutableMapOf<String, Int>()
+            for (file in names) {
+                if (!file.endsWith(".conf")) continue
+                val presetName = file.removeSuffix(".conf")
+                val text = ctx.assets.open("presets/$file").bufferedReader().readText()
+                val bundled =
+                    Config.parse(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
+                val bundledIdentity = forkWgIdentity(bundled)
+                var sameName =
+                    WireguardManager.getAllMappings().filter { it.name == presetName }
+                // proven twins: same name AND identical key material
+                var twins =
+                    sameName.filter { m ->
+                        val live = WireguardManager.getConfigById(m.id)
+                        val liveIdentity = live?.let { forkWgIdentity(it) }
+                        liveIdentity != null && liveIdentity == bundledIdentity
+                    }
+                if (twins.isEmpty() && sameName.isEmpty()) {
+                    WireguardManager.addConfig(bundled, presetName)
+                    Logger.i(LOG_TAG_UI, "fork seed: imported proxy preset $presetName")
+                    WireguardManager.load(true)
+                    sameName =
+                        WireguardManager.getAllMappings().filter { it.name == presetName }
+                    twins =
+                        sameName.filter { m ->
+                            val live = WireguardManager.getConfigById(m.id)
+                            val liveIdentity = live?.let { forkWgIdentity(it) }
+                            liveIdentity != null && liveIdentity == bundledIdentity
+                        }
+                }
+                // keeper candidates: proven twins when there are any; else a
+                // same-name config whose keys differ or cannot be read — it
+                // owns the preset's name (e.g. a WARP re-registered on a fresh
+                // keypair), so it is reused as-is and never pruned or doubled
+                val candidates = if (twins.isNotEmpty()) twins else sameName
+                if (candidates.isEmpty()) continue
+                val keeper =
+                    candidates.firstOrNull { it.isActive }
+                        ?: candidates.minByOrNull { it.id }
+                        ?: candidates.first()
+                if (twins.size > 1) {
+                    for (dup in twins) {
+                        if (dup.id == keeper.id) continue
+                        Logger.i(
+                            LOG_TAG_UI,
+                            "fork: pruning duplicate preset config ${dup.name} " +
+                                "(id ${dup.id}); keeper id ${keeper.id}"
+                        )
+                        WireguardManager.deleteConfig(dup.id)
+                    }
+                }
+                ids[presetName] = keeper.id
             }
-        if (names.isEmpty()) return
-        WireguardManager.load(false)
-        val existing = WireguardManager.getAllMappings().map { it.name }.toSet()
-        val ids = forkPresetIds()
-        for (file in names) {
-            if (!file.endsWith(".conf")) continue
-            val presetName = file.removeSuffix(".conf")
-            // v4: skip only when a live config with this name exists — the
-            // persisted id map must never veto a re-import (a stale id whose
-            // config is gone is precisely the failure being repaired)
-            if (existing.contains(presetName)) continue
-            val text = ctx.assets.open("presets/$file").bufferedReader().readText()
-            val config = Config.parse(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
-            WireguardManager.addConfig(config, presetName)
-            Logger.i(LOG_TAG_UI, "fork seed: imported proxy preset $presetName")
+            forkSavePresetIds(ids)
         }
-        WireguardManager.load(true)
-        val mappingsAfter = WireguardManager.getAllMappings()
-        for (m in mappingsAfter) {
-            if (names.any { it.removeSuffix(".conf") == m.name }) ids[m.name] = m.id
+    }
+
+    /**
+     * Key-material identity of a wireguard config: interface private key +
+     * sorted peer public keys (null when the config cannot be read). This is
+     * the same identity the engine compares in
+     * WireguardManager.canEnableProxy(id) when refusing to enable a config
+     * whose keys overlap an already-active one.
+     */
+    private fun forkWgIdentity(config: Config): String? {
+        return try {
+            val priv =
+                config.getInterface()?.getKeyPair()?.getPrivateKey()?.base64() ?: return null
+            val peers =
+                config.getPeers()?.map { it.getPublicKey().base64() }?.sorted() ?: emptyList()
+            priv + "|" + peers.joinToString(",")
+        } catch (e: Exception) {
+            null
         }
-        // v4: prune id-map entries for bundled presets that have no live
-        // config, so the home render can never key on a ghost id
-        for (file in names) {
-            if (!file.endsWith(".conf")) continue
-            val presetName = file.removeSuffix(".conf")
-            if (mappingsAfter.none { it.name == presetName }) ids.remove(presetName)
-        }
-        forkSavePresetIds(ids)
     }
 
     private fun forkPresetIds(): MutableMap<String, Int> {
@@ -4500,7 +4827,16 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             }
             WireguardManager.load(false)
             val ids = forkPresetIds()
-            val mappings = WireguardManager.getAllMappings().filter { ids.containsKey(it.name) }
+            // fork v5: exactly ONE toggle per preset — resolve the keeper by
+            // its recorded config id, never by name membership. (In v4 the
+            // name filter matched both WARP twins and rendered two toggles
+            // with independent states; the ensure pass above has already
+            // pruned the duplicate, and resolving by id keeps the render
+            // correct even if a stray same-name config ever reappears.)
+            val mappings =
+                ids.entries
+                    .sortedBy { it.key }
+                    .mapNotNull { e -> WireguardManager.getConfigFilesById(e.value) }
             uiCtx {
                 list.removeAllViews()
                 // fork v4: the section heading (fhs_fork_proxy_title) stays
