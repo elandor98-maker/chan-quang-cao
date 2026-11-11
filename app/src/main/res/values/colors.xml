@@ -19,7 +19,7 @@
 
     <color name="navBarColor">#1A1B1E</color>
 
-    <color name="accentGood">#18ffff</color>
+    <color name="accentGood">#43A047</color>
     <color name="colorGolden">#C9A000</color>
     <color name="colorGoldenLight">#A67C00</color>
     <color name="colorGoldenBlack">#C9A000</color>
@@ -32,13 +32,13 @@
     <color name="accentInfoLight">#1565C0</color>
     <color name="border">#3F4145</color>
     <color name="textViewBackground">#1A000000</color>
-    <color name="buttonBackground">#006f67</color>
-    <color name="chipBackgroundColor">#006f67</color>
+    <color name="buttonBackground">#2E7D32</color>
+    <color name="chipBackgroundColor">#2E7D32</color>
     <color name="btmSheetBgColor">#2D2F33</color>
     <color name="btmSheetCardBgColor">#3A3C41</color>
 
-    <color name="tabIndicator">#18ffff</color>
-    <color name="colorControlActivated">#FF18ffff</color>
+    <color name="tabIndicator">#43A047</color>
+    <color name="colorControlActivated">#FF43A047</color>
     <color name="colorControlActivatedBad">#DF3520</color>
     <color name="colorSwitchThumbNormal">#959595</color>
     <color name="switchNormal">#959595</color>
@@ -48,13 +48,13 @@
     <color name="colorSurfaceVariantDark">#2D2F33</color>
 
     <color name="chipBgPositive">#3380CBC4</color>
-    <color name="chipTextPositive">#18ffff</color>
+    <color name="chipTextPositive">#66BB6A</color>
     <color name="chipBgNegative">#11F48FB1</color>
     <color name="chipTextNegative">#FF1744</color>
     <color name="chipBgNeutral">#33c17900</color>
     <color name="chipTextNeutral">#ffd149</color>
     <color name="chipColorBgNormal">#90444444</color>
-    <color name="chipColorBgHighlight">#9005dfd7</color>
+    <color name="chipColorBgHighlight">#9043A047</color>
 
     <color name="primaryText">#FDFDFD</color>
 
@@ -74,9 +74,9 @@
     <color name="defaultToggleBtnBg">#393939</color>
 
     <!-- VPN header gradient - default dark theme -->
-    <color name="vpnHeaderGradientStart">#33006f67</color>
-    <color name="vpnHeaderGradientCenter">#3318ffff</color>
-    <color name="vpnHeaderGradientEnd">#3380CBC4</color>
+    <color name="vpnHeaderGradientStart">#332E7D32</color>
+    <color name="vpnHeaderGradientCenter">#3343A047</color>
+    <color name="vpnHeaderGradientEnd">#3366BB6A</color>
 
     <!-- Server selection header card gradient - deep green (dark themes) -->
     <color name="serverHeaderGradientStartDark">#15493A</color>
@@ -88,38 +88,38 @@
     <color name="serverChipBgBlack">#66004D40</color>
 
     <!-- Server selection header card gradient - soft blue (light themes) -->
-    <color name="serverHeaderGradientStartLight">#EAF4FE</color>
-    <color name="serverHeaderGradientCenterLight">#DEEDFC</color>
-    <color name="serverHeaderGradientEndLight">#CCE3FA</color>
+    <color name="serverHeaderGradientStartLight">#EAF6EC</color>
+    <color name="serverHeaderGradientCenterLight">#DDF0E0</color>
+    <color name="serverHeaderGradientEndLight">#C8E6C9</color>
 
     <!-- Hero watermark dolphin: same hue family as the header gradient but a
          deliberate shade step brighter (dark) / deeper (light) so the mark
          stays visible on the gradient. Alpha is baked into the color. -->
-    <color name="heroWatermarkTintDark">#4A1DE9B6</color>
-    <color name="heroWatermarkTintTrueBlack">#401DE9B6</color>
-    <color name="heroWatermarkTintLight">#614A8FC7</color>
+    <color name="heroWatermarkTintDark">#4A2E7D32</color>
+    <color name="heroWatermarkTintTrueBlack">#402E7D32</color>
+    <color name="heroWatermarkTintLight">#612E7D32</color>
 
     <!-- theme light -->
     <color name="colorPrimaryLight">#ececec</color>
-    <color name="colorPrimaryDarkLight">#1e88e5</color>
-    <color name="colorSecondaryLight">#881e88e5</color>
+    <color name="colorPrimaryDarkLight">#2E7D32</color>
+    <color name="colorSecondaryLight">#882E7D32</color>
     <color name="colorBackgroundFloatingLight">#efefef</color>
 
     <color name="navBarColorLight">#FFFFFF</color>
 
-    <color name="accentGoodLight">#005cb2</color>
+    <color name="accentGoodLight">#2E7D32</color>
     <color name="accentBadLight">#D12600</color>
     <color name="accentWarningLight">#895601</color>
 
     <color name="borderLight">#77757575</color>
     <color name="textViewBackgroundLight">#1A000000</color>
     <color name="homeScreenBtnBackgroundLight">#E6EEF7</color>
-    <color name="buttonBackgroundLight">#F0005cb2</color>
-    <color name="tabIndicatorLight">#ff4081</color>
+    <color name="buttonBackgroundLight">#F02E7D32</color>
+    <color name="tabIndicatorLight">#2E7D32</color>
     <color name="btmSheetBgColorLight">#ececec</color>
 
     <color name="switchNormalLight">#757575</color>
-    <color name="colorControlActivatedLight">#1e88e5</color>
+    <color name="colorControlActivatedLight">#2E7D32</color>
     <color name="colorControlActivatedBadLight">#ff1744</color>
     <color name="colorSwitchThumbNormalLight">#757575</color>
     <color name="colorSurfaceLight">#fafafa</color>
@@ -140,7 +140,7 @@
     <color name="chipBgNeutralLight">#2cc17900</color>
     <color name="chipTextNeutralLight">#895601</color>
 
-    <color name="chipColorBgHighlightLight">#901e88e5</color>
+    <color name="chipColorBgHighlightLight">#902E7D32</color>
 
     <color name="strokeLight">#000000</color>
     <color name="fillLight">#00000000</color>
@@ -175,7 +175,7 @@
 
     <color name="navBarColorBlack">#000000</color>
 
-    <color name="accentGoodBlack">#4fc3f7</color>
+    <color name="accentGoodBlack">#43A047</color>
     <color name="accentBadBlack">#ff4081</color>
     <color name="accentWarningBlack">#CCffd149</color>
 
@@ -184,7 +184,7 @@
     <color name="homeScreenBtnBackgroundBlack">#402e2c2c</color>
     <color name="buttonBackgroundBlack">#4fc3f7</color>
     <color name="textViewBackgroundBlack">#000000</color>
-    <color name="tabIndicatorBlack">#4fc3f7</color>
+    <color name="tabIndicatorBlack">#43A047</color>
     <color name="btmSheetBgColorBlack">#121212</color>
 
     <color name="colorControlActivatedBlack">#4fc3f7</color>

@@ -166,6 +166,7 @@ import java.io.File
 import java.io.FileOutputStream
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import org.koin.android.ext.android.inject
 import android.graphics.Matrix
 import android.graphics.SurfaceTexture
@@ -201,6 +202,15 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     // fragment instance, before the first vpn start of the session
     private var forkSeedGateRunning: Boolean = false
     private var forkSeedGateDone: Boolean = false
+
+    // fork v3: last observed vpn activation state; a real transition (start or
+    // stop) invalidates the cached public ip so the hero line re-fetches
+    private var forkLastVpnActivated: Boolean? = null
+
+    // fork v3: hero dns status line parts (endpoint name + status/latency),
+    // mirrored from the same updates that drive the (now hidden) dns card
+    private var forkHeroDnsName: String? = null
+    private var forkHeroDnsHeadline: String = ""
 
     // fork v2: hero background video player (home screen only; released with the view)
     private var forkHeroPlayer: MediaPlayer? = null
@@ -705,6 +715,14 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     private fun observeVpnState() {
         persistentState.vpnEnabledLiveData.observe(viewLifecycleOwner) {
             isVpnActivated = it
+            // fork v3: a real vpn start/stop transition invalidates the cached
+            // public ip so the hero line re-fetches (event-only; no polling)
+            val forkPrevVpn = forkLastVpnActivated
+            if (forkPrevVpn != null && forkPrevVpn != it) {
+                persistentState.forkPublicIpCache = ""
+                forkFetchPublicIp()
+            }
+            forkLastVpnActivated = it
             updateMainButtonUi()
             updateCardsUi()
             syncDnsStatus()
@@ -2300,6 +2318,11 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         b.fhsCardDnsConnectedDns.text = getString(R.string.hsf_dns_mode_off_indicator)
         b.fhsCardDnsConnectedDns.alpha = 0.75f
         b.fhsCardDnsLatency.visibility = View.GONE
+
+        // fork v3: mirror the dns-off state onto the hero dns line
+        forkHeroDnsName = getString(R.string.hsf_dns_mode_off_indicator)
+        forkHeroDnsHeadline = ""
+        forkUpdateHeroDnsLine()
     }
 
     private fun disableAppsCard() {
@@ -2404,6 +2427,10 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             if (parts.isEmpty()) b.fhsCardDnsLatency.context.getString(R.string.lbl_inactive)
             else parts.joinToString(" · ")
         b.fhsCardDnsLatency.isSelected = true
+
+        // fork v3: mirror the status / colo / latency headline onto the hero line
+        forkHeroDnsHeadline = parts.joinToString(" · ")
+        forkUpdateHeroDnsLine()
     }
 
     private fun updateUiWithDnsStates(dnsStatus: Int? = null) {
@@ -2415,6 +2442,10 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         b.fhsCardDnsConnectedDns.alpha = 1f
         b.fhsCardDnsConnectedDns.text = dnsName
         b.fhsCardDnsConnectedDns.isSelected = true
+
+        // fork v3: mirror the endpoint name onto the hero dns line
+        forkHeroDnsName = dnsName
+        forkUpdateHeroDnsLine()
 
         val generation = ++dnsBlocklistGeneration
 
@@ -3300,21 +3331,22 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     }
 
     private fun prepareAndStartVpn() {
-        // fork v2: gate the first vpn start of a not-yet-seeded install until
-        // the presets (RDNS Privacy + DNS-only mode) are applied and verified,
-        // so the tunnel is never built on the factory defaults. Runs at most
-        // once per session; a preset failure never blocks the vpn for good
-        // (the gate falls through and retries on the next launch instead).
-        if (!persistentState.forkSeededV2 && !forkSeedGateDone) {
+        // fork v3: gate the first vpn start of a not-yet-seeded install until
+        // the preset rule has run (see forkApplyPresetsV3: a user-chosen dns
+        // endpoint is never overridden; the RDNS Privacy preset is applied
+        // only while the factory default is still active). Runs at most once
+        // per session; a preset failure never blocks the vpn for good (the
+        // gate falls through and retries on the next launch instead).
+        if (!persistentState.forkSeededV3 && !forkSeedGateDone) {
             if (!forkSeedGateRunning) {
                 forkSeedGateRunning = true
                 lifecycleScope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            withTimeoutOrNull(15_000) { forkApplyPresetsV2() }
+                            withTimeoutOrNull(15_000) { forkApplyPresetsV3() }
                         }
                     } catch (e: Exception) {
-                        Logger.w(LOG_TAG_UI, "fork seed v2 gate failed: ${e.message}", e)
+                        Logger.w(LOG_TAG_UI, "fork seed v3 gate failed: ${e.message}", e)
                     } finally {
                         forkSeedGateRunning = false
                         forkSeedGateDone = true
@@ -3878,23 +3910,33 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     }
 
     /**
-     * The hero video ships as two raw-resource halves (fork_sea_loop_a/b):
+     * The hero video ships as six raw-resource chunks (fork_sea_loop_a..f):
      * the full mp4's base64 twin exceeds the push channel's per-request size
-     * ceiling, so the halves travel separately and are joined into a cache
+     * ceiling, so the chunks travel separately and are joined into a cache
      * file on first use. The join is a one-time local copy; playback then
      * reads the combined file like any other video file.
      */
     private fun forkHeroCombinedFile(ctx: Context): File? {
         return try {
-            val out = File(ctx.cacheDir, "fork_sea_loop_v2.mp4")
-            if (out.exists() && out.length() > 1_000_000L) return out
-            val tmp = File(ctx.cacheDir, "fork_sea_loop_v2.tmp")
+            val out = File(ctx.cacheDir, "fork_sea_loop_v3.mp4")
+            if (out.exists() && out.length() > 5_000_000L) return out
+            val tmp = File(ctx.cacheDir, "fork_sea_loop_v3.tmp")
             FileOutputStream(tmp).use { os ->
-                for (resId in intArrayOf(R.raw.fork_sea_loop_a, R.raw.fork_sea_loop_b)) {
+                for (
+                    resId in
+                        intArrayOf(
+                            R.raw.fork_sea_loop_a,
+                            R.raw.fork_sea_loop_b,
+                            R.raw.fork_sea_loop_c,
+                            R.raw.fork_sea_loop_d,
+                            R.raw.fork_sea_loop_e,
+                            R.raw.fork_sea_loop_f
+                        )
+                ) {
                     ctx.resources.openRawResource(resId).use { input -> input.copyTo(os) }
                 }
             }
-            if (tmp.renameTo(out) && out.length() > 1_000_000L) out else null
+            if (tmp.renameTo(out) && out.length() > 5_000_000L) out else null
         } catch (e: Exception) {
             Logger.w(LOG_TAG_UI, "fork hero: video join failed: ${e.message}", e)
             null
@@ -4015,6 +4057,17 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         forkHeroSurface = null
     }
 
+    /** Composes the hero dns status line from the mirrored card values. */
+    private fun forkUpdateHeroDnsLine() {
+        if (view == null) return
+        try {
+            val parts = listOfNotNull(forkHeroDnsName, forkHeroDnsHeadline.ifEmpty { null })
+            b.fhsHeroDnsTxt.text = parts.joinToString(" · ")
+        } catch (e: Exception) {
+            // hero dns view unavailable (layout variant / view teardown); skip quietly
+        }
+    }
+
     /** Refreshes the hero status line, toggle tint and today's blocked count. */
     private fun forkRefreshHero() {
         if (view == null) return
@@ -4035,26 +4088,80 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     }
 
     /**
-     * Fork v2 preset seed: RDNS Privacy + DNS-only brave mode, applied through
-     * the engine's own change paths (the same calls the settings UI makes), and
-     * verified by reading the connected endpoint back. Only a verified run is
-     * marked done (forkSeededV2); failures are retried on the next launch.
+     * Fork v3 preset rule (replaces the v2 seed):
+     *
+     *  1. A user-chosen dns endpoint is NEVER overridden. If the active
+     *     endpoint is anything other than the factory default ("RDNS Default")
+     *     or the preset itself ("RDNS Privacy"), the user (or a previous seed)
+     *     has spoken: mark seeded and touch nothing — neither the endpoint nor
+     *     the brave mode.
+     *  2. On a fresh / untouched install (factory default still active, or no
+     *     endpoint row at all) the strong preset is applied automatically as
+     *     the ACTIVE endpoint through the engine's own change paths (the same
+     *     calls the settings UI makes): RDNS Privacy via handleRethinkChanges
+     *     + DNS-only brave mode via changeBraveMode, verified by reading the
+     *     connected endpoint back. Only a verified run is marked done.
+     *
+     * Why v2's seed never took effect on the user's phone (diagnosed from
+     * code): the gate lives in prepareAndStartVpn(), which only runs on an
+     * actual start request. On an install-over (v1 -> v2) the vpn was already
+     * running (restarted by the package-replaced / boot receivers, with
+     * vpnEnabled persisted), the home screen opened with the vpn ON, and the
+     * fork auto-start hook (maybeAutoStartVpn) only fires when the vpn is
+     * off — so prepareAndStartVpn was never called, the gate never ran, and
+     * his manually chosen "RDNS Plus" simply stayed active. Had the gate run,
+     * it would have stomped that deliberate choice — the design flaw rule (1)
+     * now removes. The gate placement is kept (it is the only point that is
+     * guaranteed to precede a tunnel build); installs that never pass through
+     * a start keep whatever endpoint is active, which under rule (1) is the
+     * correct outcome anyway.
      *
      * Why v1's seed did not stick: it wrote the endpoint table and the
      * connectedDnsName pref directly, bypassing AppConfig.onDnsChange — so the
      * connectedDns LiveData (initialised once from the pref when AppConfig is
      * created, and the only source the home DNS card reads) kept showing the
      * factory default name; it also raced the auto-start, so a tunnel built
-     * before the write landed ran on RDNS Default for that session; and it set
-     * forkSeeded=true even when a step had failed. The brave mode likewise was
+     * before the write landed ran on RDNS Default for that whole session; and it
+     * set forkSeeded=true even when a step had failed. The brave mode likewise was
      * only a pref *default*, never an explicit write.
      */
-    private suspend fun forkApplyPresetsV2() {
+    private suspend fun forkApplyPresetsV3() {
+        val active =
+            try {
+                rethinkDnsEndpointRepository.getConnectedEndpoint()
+            } catch (e: Exception) {
+                null
+            }
+        // rule (1): respect any non-default active endpoint (user choice)
+        if (
+            active != null &&
+                active.name != RethinkDnsEndpoint.RETHINK_DEFAULT &&
+                active.name != RethinkDnsEndpoint.RETHINK_PRIVACY
+        ) {
+            persistentState.forkSeededV3 = true
+            persistentState.forkSeededV2 = true
+            persistentState.forkSeeded = true
+            Logger.i(
+                LOG_TAG_UI,
+                "fork seed v3: active endpoint '${active.name}' is a user choice; presets skipped"
+            )
+            return
+        }
+        // the preset is already active (seeded earlier or chosen by the user):
+        // nothing to apply; do not touch the brave mode either
+        if (active?.name == RethinkDnsEndpoint.RETHINK_PRIVACY) {
+            persistentState.forkSeededV3 = true
+            persistentState.forkSeededV2 = true
+            persistentState.forkSeeded = true
+            Logger.i(LOG_TAG_UI, "fork seed v3: RDNS Privacy already active; nothing to apply")
+            return
+        }
+        // rule (2): fresh / untouched install — apply the preset
         // (1) brave mode: explicit write through AppConfig (pref + observer)
         try {
             appConfig.changeBraveMode(AppConfig.BraveMode.DNS.mode)
         } catch (e: Exception) {
-            Logger.w(LOG_TAG_UI, "fork seed v2: brave mode write failed: ${e.message}", e)
+            Logger.w(LOG_TAG_UI, "fork seed v3: brave mode write failed: ${e.message}", e)
         }
         // (2) RDNS Privacy via the engine's own activation path (identical to
         // tapping the endpoint in the DNS list: RethinkEndpointAdapter)
@@ -4065,10 +4172,10 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
                 privacy.isActive = true
                 appConfig.handleRethinkChanges(privacy)
             } else {
-                Logger.w(LOG_TAG_UI, "fork seed v2: RDNS Privacy endpoint row not found")
+                Logger.w(LOG_TAG_UI, "fork seed v3: RDNS Privacy endpoint row not found")
             }
         } catch (e: Exception) {
-            Logger.w(LOG_TAG_UI, "fork seed v2: dns preset failed: ${e.message}", e)
+            Logger.w(LOG_TAG_UI, "fork seed v3: dns preset failed: ${e.message}", e)
         }
         // (3) verify by reading back; mark seeded only on success
         val ep =
@@ -4081,13 +4188,14 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
             ep?.name == RethinkDnsEndpoint.RETHINK_PRIVACY &&
                 persistentState.braveMode == AppConfig.BraveMode.DNS.mode
         ) {
+            persistentState.forkSeededV3 = true
             persistentState.forkSeededV2 = true
             persistentState.forkSeeded = true
-            Logger.i(LOG_TAG_UI, "fork seed v2: RDNS Privacy + DNS-only mode verified")
+            Logger.i(LOG_TAG_UI, "fork seed v3: RDNS Privacy + DNS-only mode verified")
         } else {
             Logger.w(
                 LOG_TAG_UI,
-                "fork seed v2: verification failed (endpoint=${ep?.name}, " +
+                "fork seed v3: verification failed (endpoint=${ep?.name}, " +
                     "mode=${persistentState.braveMode}); will retry next launch"
             )
         }
@@ -4097,10 +4205,11 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
     private fun forkFirstLaunchSetup() {
         val ctx = requireContext()
         io {
-            // (a) DNS endpoint + brave-mode presets moved to the gated v2 seed
-            // (forkApplyPresetsV2), which runs through AppConfig's own change
-            // paths, is awaited before the first vpn start, and is verified by
-            // reading the connected endpoint back before being marked done.
+            // (a) DNS endpoint + brave-mode presets moved to the gated v3 seed
+            // (forkApplyPresetsV3), which runs through AppConfig's own change
+            // paths, is awaited before the first vpn start, never overrides a
+            // user-chosen endpoint, and is verified by reading the connected
+            // endpoint back before being marked done.
             if (!persistentState.forkSeeded) {
                 // (b) import bundled wireguard proxy presets, if the build shipped any
                 try {
@@ -4218,6 +4327,15 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
                                 )
                                 .apply { topMargin = 6 }
                         btn.text = forkPresetLabel(m.name, m.isActive)
+                        // fork v3: the preset list now lives on the hero, over the
+                        // video — restyle to match the hero link buttons (translucent
+                        // dark fill, white text, light outline)
+                        val density = resources.displayMetrics.density
+                        btn.setTextColor(0xFFFFFFFF.toInt())
+                        btn.backgroundTintList = ColorStateList.valueOf(0x40000000)
+                        btn.strokeColor = ColorStateList.valueOf(0x8CFFFFFF.toInt())
+                        btn.strokeWidth = (1f * density).toInt()
+                        btn.cornerRadius = (20f * density).toInt()
                         btn.setOnClickListener { forkToggleProxyPreset(m.id) }
                         list.addView(btn)
                     }
@@ -4266,64 +4384,123 @@ class HomeScreenFragment : Fragment(R.layout.fragment_home_screen) {
         }
     }
 
+    /**
+     * Shows the cached public-ip line. Cache format (v3): "ipv4|place|isp|epochMs"
+     * where place is "City, Region" (or just the country) and isp may be empty.
+     * Legacy v1/v2 caches ("ip|countryCode|epochMs") do not parse into the v3
+     * shape and are treated as absent, so a fresh lookup follows.
+     */
     private fun forkShowCachedPublicIp() {
-        val raw = persistentState.forkPublicIpCache
-        if (raw.isEmpty()) {
-            forkSetIpText("IP hiện tại của máy: đang kiểm tra…")
-            return
-        }
-        val parts = raw.split("|")
-        if (parts.size >= 2) {
-            val country =
-                try {
-                    Locale("", parts[1]).displayCountry
-                } catch (e: Exception) {
-                    parts[1]
-                }
-            forkSetIpText("IP hiện tại của máy: ${parts[0]} · $country")
+        val parts = persistentState.forkPublicIpCache.split("|")
+        if (parts.size >= 4 && parts[0].isNotEmpty()) {
+            val segs = listOf(parts[0], parts[1], parts[2]).filter { it.isNotEmpty() }
+            forkSetIpText("IP: " + segs.joinToString(" · "))
+        } else {
+            forkSetIpText("IP: đang kiểm tra…")
         }
     }
 
+    private fun forkCachedIpFresh(): Boolean {
+        val parts = persistentState.forkPublicIpCache.split("|")
+        if (parts.size < 4) return false
+        val ts = parts[3].toLongOrNull() ?: return false
+        return System.currentTimeMillis() - ts < 10 * 60 * 1000L
+    }
+
     /**
-     * Event-only public IP fetch (no polling): runs on app open and after
-     * start/stop/proxy toggles, and only when the cached value is stale.
-     * Note: this app is excluded from its own tunnel, so the value shown is
-     * always the device's real direct IP (labelled honestly as such).
+     * Event-only public IP fetch (no polling): runs on app open, on resume, and
+     * after vpn start/stop transitions and proxy toggles, and only when the
+     * cached value is stale. Note: this app is excluded from its own tunnel, so
+     * the value shown is always the device's real direct IP (labelled honestly
+     * as such).
      */
     private fun forkFetchPublicIp() {
-        val raw = persistentState.forkPublicIpCache
-        if (raw.isNotEmpty()) {
-            val ts = raw.split("|").getOrNull(2)?.toLongOrNull() ?: 0L
-            if (System.currentTimeMillis() - ts < 10 * 60 * 1000L) {
-                forkShowCachedPublicIp()
-                return
-            }
+        if (forkCachedIpFresh()) {
+            forkShowCachedPublicIp()
+            return
         }
         io {
-            val ipLine =
-                try {
-                    val client = OkHttpClient()
-                    val req =
-                        Request.Builder().url("https://www.cloudflare.com/cdn-cgi/trace").build()
-                    client.newCall(req).execute().use { resp ->
-                        if (!resp.isSuccessful) null
-                        else {
-                            val body = resp.body?.string() ?: ""
-                            val ip = body.lineSequence().firstOrNull { it.startsWith("ip=") }
-                                ?.removePrefix("ip=")
-                            val loc = body.lineSequence().firstOrNull { it.startsWith("loc=") }
-                                ?.removePrefix("loc=")
-                            if (ip != null) "$ip|${loc ?: ""}|${System.currentTimeMillis()}" else null
-                        }
-                    }
-                } catch (e: Exception) {
-                    null
-                }
-            if (ipLine != null) {
-                persistentState.forkPublicIpCache = ipLine
+            val entry = forkLookupPublicIp()
+            if (entry != null) {
+                persistentState.forkPublicIpCache = entry
                 uiCtx { forkShowCachedPublicIp() }
             }
         }
+    }
+
+    /** Performs the lookup; returns a v3 cache entry or null on total failure. */
+    private fun forkLookupPublicIp(): String? {
+        val client =
+            OkHttpClient.Builder()
+                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+        fun get(url: String): String? =
+            try {
+                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                    if (resp.isSuccessful) resp.body?.string() else null
+                }
+            } catch (e: Exception) {
+                null
+            }
+
+        // (1) the public IPv4 address. The v1/v2 cloudflare trace returned his
+        // IPv6, which is not the standard dotted-quad address ("dải số") the
+        // user asked to see; these endpoints are IPv4-only by construction.
+        var ipv4 = get("https://ipv4.icanhazip.com")?.trim()?.takeIf { forkLooksLikeIpv4(it) }
+        if (ipv4 == null) {
+            ipv4 = get("https://api4.ipify.org")?.trim()?.takeIf { forkLooksLikeIpv4(it) }
+        }
+        if (ipv4 != null) {
+            // (2) geo enrichment from a free no-key https source: city/region
+            // plus the ISP name. Best-effort: any failure still shows the ip.
+            var place = ""
+            var isp = ""
+            val geo = get("https://ipwho.is/$ipv4")
+            if (geo != null) {
+                try {
+                    val j = JSONObject(geo)
+                    if (j.optBoolean("success", false)) {
+                        val city = j.optString("city", "")
+                        val region = j.optString("region", "")
+                        place =
+                            listOf(city, region)
+                                .filter { it.isNotEmpty() }
+                                .distinct()
+                                .joinToString(", ")
+                        if (place.isEmpty()) place = j.optString("country", "")
+                        val conn = j.optJSONObject("connection")
+                        isp = conn?.optString("isp", "") ?: ""
+                        if (isp.isEmpty()) isp = conn?.optString("org", "") ?: ""
+                    }
+                } catch (e: Exception) {
+                    // geo is best-effort only; the bare ipv4 line still shows
+                }
+            }
+            return "$ipv4|$place|$isp|${System.currentTimeMillis()}"
+        }
+        // (3) fallback: cloudflare trace (may return IPv6), labelled with the
+        // country only — honest degradation, never a fabricated value
+        val trace = get("https://www.cloudflare.com/cdn-cgi/trace")
+        if (trace != null) {
+            val ip = trace.lineSequence().firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=")
+            val loc = trace.lineSequence().firstOrNull { it.startsWith("loc=") }?.removePrefix("loc=")
+            if (!ip.isNullOrEmpty()) {
+                val country =
+                    try {
+                        Locale("", loc ?: "").displayCountry
+                    } catch (e: Exception) {
+                        loc ?: ""
+                    }
+                return "$ip|$country||${System.currentTimeMillis()}"
+            }
+        }
+        return null
+    }
+
+    private fun forkLooksLikeIpv4(s: String): Boolean {
+        val octets = s.split(".")
+        return octets.size == 4 && octets.all { (it.toIntOrNull() ?: -1) in 0..255 }
     }
 
     private fun ui(n: String, f: suspend () -> Unit): Job {

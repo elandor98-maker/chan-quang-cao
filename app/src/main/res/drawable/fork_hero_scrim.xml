@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- fork: dark gradient scrim over the home hero video so text and cards stay readable -->
+<!-- fork v3: scrim over the home hero video - darkened only behind the top
+     (title/status) and bottom (ip/dns/links/proxy) text zones; the centre of
+     the video stays essentially clear so the picture reads sharp -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <gradient
         android:angle="270"
         android:startColor="#73000000"
-        android:centerColor="#33000000"
-        android:endColor="#99000000"
+        android:centerColor="#0A000000"
+        android:centerOffset="0.5"
+        android:endColor="#8C000000"
         android:type="linear" />
 </shape>

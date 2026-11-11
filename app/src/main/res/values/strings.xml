@@ -1,6 +1,6 @@
 <resources>
     <string name="app_name" translatable="false">Chặn Quảng Cáo</string>
-    <string name="app_name_small_case" translatable="false">rethink</string>
+    <string name="app_name_small_case" translatable="false">chặn quảng cáo</string>
     <string name="app_name_alpha" translatable="false">RETHINK α</string>
     <string name="title_about" translatable="true">About</string>
     <string name="title_settings" translatable="true">Settings</string>
@@ -8,7 +8,7 @@
     <string name="title_proc" translatable="false">Proc</string>
     <string name="pause_title_desc" translatable="true">taking a nap…</string>
     <string name="settings_title_desc" translatable="true">A highly customizable DNS and Firewall</string>
-    <string name="about_title_desc" translatable="true">Detect and block network security threats</string>
+    <string name="about_title_desc" translatable="true">Block ads · Save battery</string>
 
     <string name="txt_home" translatable="true">Home</string>
 
@@ -1003,7 +1003,7 @@
     <string name="fork_about_web_label" translatable="true">Shopee cashback website</string>
     <string name="fork_web_link" translatable="false">https://h80.elandor-98.workers.dev</string>
     <string name="fork_credit_line" translatable="false">Dùng RDNS của CelZero (Rethink DNS, mã nguồn mở Apache-2.0) · Proxy WARP của Cloudflare (1.1.1.1)</string>
-    <string name="fork_video_credit_line" translatable="true">Background video: “Drone Flight – Cape Kiwanda, Oregon” by Aerial Northwest (Tony Marino), CC BY 3.0 — via Wikimedia Commons</string>
+    <string name="fork_video_credit_line" translatable="true">Background video: “Aerial view of sand beach · Top view sea waves” (drone footage) by Nature video, HD - 4K, CC BY 3.0 — via Wikimedia Commons</string>
     <string name="fork_hero_blocked_today" translatable="true">Blocked today: %1$d</string>
     <string name="fork_hero_status_on" translatable="true">Ad blocking is ON</string>
     <string name="fork_hero_status_off" translatable="true">Ad blocking is OFF</string>

@@ -5,10 +5,14 @@
         android:id="@+id/homeScreenFragment"
         android:icon="@drawable/ic_home_black_24dp"
         android:title="@string/txt_home" />
+    <!-- fork v3: stats tab hidden (its data source is the logs-gated db, which
+         is off by design in this product, so the tab only ever showed zeros);
+         the destination and fragment code stay intact but unreachable -->
     <item
         android:id="@+id/summaryStatisticsFragment"
         android:icon="@drawable/ic_statistics"
-        android:title="@string/title_statistics" />
+        android:title="@string/title_statistics"
+        android:visible="false" />
 
     <item
         android:id="@+id/configureFragment"

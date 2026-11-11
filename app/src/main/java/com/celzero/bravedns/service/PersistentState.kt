@@ -166,6 +166,12 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     // v1 installs re-run the corrected seed exactly once
     var forkSeededV2 by booleanPref("fork_seeded_v2").withDefault<Boolean>(false)
 
+    // v3 seed: same presets as v2, but a user-chosen dns endpoint is never
+    // overridden; the preset is applied only when the active endpoint is still
+    // the factory default (fresh install / untouched dns). Separate key so the
+    // corrected rule runs exactly once on v1/v2 installs too.
+    var forkSeededV3 by booleanPref("fork_seeded_v3").withDefault<Boolean>(false)
+
     // lightweight "blocked today" counter for the home hero (date + count);
     // kept independent of the (battery-costly) dns/connection logging
     var forkBlockedDay by stringPref("fork_blocked_day").withDefault<String>("")
@@ -179,7 +185,8 @@ class PersistentState(context: Context) : SimpleKrate(context), KoinComponent {
     // wireguard config ids of bundled proxy presets, format: "name1=id1;name2=id2"
     var forkProxyPresetIds by stringPref("fork_proxy_preset_ids").withDefault<String>("")
 
-    // cached public-ip line shown on the home screen ("ip|countryCode|epochMs")
+    // cached public-ip line shown on the home screen
+    // (v3 format: "ipv4|place|isp|epochMs"; v1/v2 entries are ignored on read)
     var forkPublicIpCache by stringPref("fork_public_ip_cache").withDefault<String>("")
 
     // OOBE (out-of-the-box experience) screens are shown if the user

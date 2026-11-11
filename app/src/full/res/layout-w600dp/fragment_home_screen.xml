@@ -41,15 +41,17 @@
             android:layout_gravity="center_horizontal"
             android:paddingBottom="32dp">
 
-            <!-- fork: hero block over the sea video -->
+            <!-- fork: hero block over the sea video (v3: the ONLY visible home content) -->
             <LinearLayout
                 android:id="@+id/fhs_hero_block"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="0dp"
                 android:gravity="center_horizontal"
                 android:orientation="vertical"
                 android:paddingHorizontal="20dp"
                 android:paddingTop="30dp"
+                android:paddingBottom="24dp"
+                app:layout_constraintBottom_toBottomOf="parent"
                 app:layout_constraintTop_toTopOf="parent">
 
                 <androidx.appcompat.widget.AppCompatTextView
@@ -81,11 +83,15 @@
                     android:textSize="15sp"
                     tools:text="Đang chặn quảng cáo" />
 
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
                 <androidx.appcompat.widget.AppCompatImageButton
                     android:id="@+id/fhs_hero_toggle_btn"
                     android:layout_width="104dp"
                     android:layout_height="104dp"
-                    android:layout_marginTop="20dp"
                     android:background="@drawable/fork_hero_toggle_bg"
                     android:contentDescription="@string/app_name"
                     android:padding="28dp"
@@ -120,12 +126,33 @@
                     android:shadowRadius="4"
                     android:textColor="#FFFFFF"
                     android:textSize="13sp"
-                    tools:text="IP hiện tại của máy: 203.0.113.4 · Việt Nam" />
+                    tools:text="IP: 203.0.113.4 · Thành phố Hồ Chí Minh · VNPT" />
+
+                <androidx.appcompat.widget.AppCompatTextView
+                    android:id="@+id/fhs_hero_dns_txt"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:alpha="0.9"
+                    android:ellipsize="end"
+                    android:gravity="center"
+                    android:maxLines="1"
+                    android:shadowColor="#80000000"
+                    android:shadowDx="0"
+                    android:shadowDy="1"
+                    android:shadowRadius="4"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    tools:text="RDNS Plus · Đã kết nối · SIN (78 ms)" />
+
+                <View
+                    android:layout_width="1dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
 
                 <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
                     android:gravity="center"
                     android:orientation="horizontal">
 
@@ -154,10 +181,33 @@
 
                 </LinearLayout>
 
+                <androidx.appcompat.widget.AppCompatTextView
+                    android:id="@+id/fhs_fork_proxy_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:alpha="0.9"
+                    android:gravity="center"
+                    android:shadowColor="#80000000"
+                    android:shadowDx="0"
+                    android:shadowDy="1"
+                    android:shadowRadius="4"
+                    android:text="Proxy (bấm để bật / tắt)"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:id="@+id/fhs_fork_proxy_list"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="vertical" />
+
             </LinearLayout>
 
             <androidx.constraintlayout.widget.ConstraintLayout
                 android:id="@+id/fhs_protection_bar"
+                        android:visibility="gone"
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
                 android:layout_marginHorizontal="10dp"
@@ -218,6 +268,7 @@
 
             <LinearLayout
                 android:id="@+id/fhs_firewall_badges_row"
+                android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -294,6 +345,7 @@
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/fhs_throughput_ll"
+                        android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="0dp"
                 android:clickable="true"
@@ -334,6 +386,7 @@
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/fhs_card_dns_ll"
+                        android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="0dp"
                 android:layout_marginStart="2dp"
@@ -389,6 +442,7 @@
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/fhs_card_proxy_ll"
+                        android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -676,6 +730,7 @@
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/fhs_card_apps_cv"
+                        android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -854,6 +909,7 @@
             <!-- fork: public IP + one-tap proxy presets card -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/fhs_fork_card"
+                        android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
@@ -880,27 +936,14 @@
                         android:textSize="@dimen/default_font_text_view"
                         tools:text="IP" />
 
-                    <androidx.appcompat.widget.AppCompatTextView
-                        android:id="@+id/fhs_fork_proxy_title"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:text="Proxy"
-                        android:textColor="?attr/primaryLightColorText"
-                        android:textSize="@dimen/small_font_text_view" />
-
-                    <LinearLayout
-                        android:id="@+id/fhs_fork_proxy_list"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:orientation="vertical" />
+                    
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
 
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/fhs_card_logs_ll"
+                        android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="0dp"
                 android:layout_marginTop="12dp"
@@ -1006,6 +1049,7 @@
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/fhs_control_cluster"
+                        android:visibility="gone"
         android:layout_width="0dp"
         android:layout_height="64dp"
         android:layout_marginBottom="20dp"

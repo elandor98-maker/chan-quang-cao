@@ -2,7 +2,7 @@
 <resources>
     <string name="title_settings" translatable="true">Cài đặt</string>
     <string name="title_statistics" translatable="true">Thống kê</string>
-    <string name="about_title_desc" translatable="true">Phát hiện và ngăn chặn các mối đe doạ an ninh mạng</string>
+    <string name="about_title_desc" translatable="true">Chặn quảng cáo · Tiết kiệm pin</string>
     <string name="txt_home" translatable="true">Trang chủ</string>
     <string name="next" translatable="true">Tiếp</string>
     <string name="skip" translatable="true">Bỏ qua</string>
@@ -926,7 +926,7 @@
     <string name="rt_filter_desc" translatable="true"><![CDATA[Hiển thị <u>%1$s</u> danh sách chặn]]></string>
     <string name="fork_about_telegram_label" translatable="true">Telegram hỗ trợ</string>
     <string name="fork_about_web_label" translatable="true">Web hoàn hoa hồng Shopee</string>
-    <string name="fork_video_credit_line" translatable="true">Video nền: “Drone Flight – Cape Kiwanda, Oregon” của Aerial Northwest (Tony Marino), giấy phép CC BY 3.0 — qua Wikimedia Commons</string>
+    <string name="fork_video_credit_line" translatable="true">Video nền: “Bãi biển nhìn từ trên cao · Sóng biển” (quay bằng drone) của Nature video, HD - 4K, giấy phép CC BY 3.0 — qua Wikimedia Commons</string>
     <string name="fork_hero_blocked_today" translatable="true">Hôm nay đã chặn: %1$d</string>
     <string name="fork_hero_status_on" translatable="true">Đang chặn quảng cáo</string>
     <string name="fork_hero_status_off" translatable="true">Chưa bật chặn quảng cáo</string>
