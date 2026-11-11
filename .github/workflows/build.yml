@@ -28,6 +28,8 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      # Binary assets (db, dbip, png/webp, gradle wrapper jar, keystore) travel
+      # as .b64 text because the push channel is UTF-8 only; restore them here.
       - name: Decode base64 assets
         run: |
           find . -name '*.b64' -not -path './.git/*' | while read -r f; do
@@ -36,6 +38,9 @@ jobs:
             echo "decoded ${f%.b64}"
           done
 
+      # Fixed signing: the decoded signing/debug.keystore is fed to BOTH signing
+      # paths in app/build.gradle.kts ("config" via keystore.properties and the
+      # izzyondroid config used when -PwebsiteDegoogled=true, via env below).
       - name: Prepare fixed keystore
         run: |
           test -f signing/debug.keystore
@@ -46,6 +51,11 @@ jobs:
           storePassword=android
           storeFile=${{ github.workspace }}/signing/debug.keystore
           EOF
+
+      # NOTE: the WARP proxy preset config (contains a private key) is NOT part
+      # of this build. It is injected into the built APK locally afterwards and
+      # the APK is re-signed with the same fixed keystore before delivery, so
+      # the private key never reaches GitHub at all.
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -64,9 +74,10 @@ jobs:
           if [ -z "$APK" ]; then echo "::error::arm64 APK not found"; find app/build/outputs/apk -type f | head -50; exit 1; fi
           echo "APK=$APK"
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
-          FP=$("$APKSIGNER" verify --print-certs "$APK" | grep -i "SHA-256" | head -n 1 | sed 's/.*: //' | tr -d ' ')
-          EXPECTED_NOSPACE=$(echo "$EXPECTED_SIGNER" | tr -d ' ')
+          FP=$("$APKSIGNER" verify --print-certs "$APK" | grep -i "SHA-256" | head -n 1 | sed 's/.*: //' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+          EXPECTED_NOSPACE=$(echo "$EXPECTED_SIGNER" | tr -d ': ' | tr '[:upper:]' '[:lower:]')
           echo "signer SHA-256: $FP"
+          echo "expected SHA-256: $EXPECTED_NOSPACE"
           if [ "$FP" != "$EXPECTED_NOSPACE" ]; then
             echo "::error::Signer mismatch (expected $EXPECTED_SIGNER) - THAT BAI, not releasing"
             exit 1
